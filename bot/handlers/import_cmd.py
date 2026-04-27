@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, ReplyKeyboardRemove, Update
+from telegram.constants import ChatAction
 from telegram.ext import (
     CallbackQueryHandler,
     CommandHandler,
@@ -53,6 +54,7 @@ async def import_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         return ConversationHandler.END
 
     _clear_import_state(context)
+    await update.message.chat.send_action(ChatAction.TYPING)
     await update.message.reply_text(
         "Send me the CSV file and I'll detect the broker automatically.\n\nSend /cancel to abort.",
         reply_markup=ReplyKeyboardRemove(),
@@ -76,6 +78,7 @@ async def import_receive_file(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
         return UPLOAD_FILE
 
+    await update.message.chat.send_action(ChatAction.TYPING)
     await update.message.reply_text(
         f"Processing `{doc.file_name}`…",
         parse_mode="Markdown",
@@ -144,6 +147,7 @@ async def _process_csv(
     broker_slug: str,
 ) -> int:
     """Parse CSV with the given broker slug and proceed to account selection."""
+    await update.message.chat.send_action(ChatAction.TYPING)
     try:
         parser = get_parser(broker_slug)
         activities = parser.parse(csv_content)

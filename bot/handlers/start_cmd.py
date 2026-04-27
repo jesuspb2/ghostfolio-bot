@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from telegram import Update
+from telegram.constants import ChatAction
 from telegram.ext import ContextTypes
 
 from bot.utils.auth import restricted
@@ -22,6 +23,7 @@ Available commands:
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Send welcome message."""
     if update.message:
+        await update.message.chat.send_action(ChatAction.TYPING)
         await update.message.reply_text(HELP_TEXT, parse_mode="Markdown")
 
 
@@ -29,4 +31,5 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 async def help_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Send help message."""
     if update.message:
+        await update.message.chat.send_action(ChatAction.TYPING)
         await update.message.reply_text(HELP_TEXT, parse_mode="Markdown")
