@@ -1,7 +1,14 @@
 """Handler for /import — upload a broker CSV and import into Ghostfolio.
 
 Flow:
-  /import → broker selection → CSV upload → account selection → preview → confirm → import
+  /import → CSV upload → (auto-detect broker) → account selection → preview → confirm → import
+  If auto-detect fails → broker selection keyboard (CSV already stored) → account selection → …
+
+Cancel is available at every step:
+  - ReplyKeyboard "❌ Cancel" button during UPLOAD_FILE and SELECT_BROKER
+  - Inline "❌ Cancel" button during SELECT_ACCOUNT and IMPORT_CONFIRM
+  - /cancel command works at any point
+  - /import restarts a stuck conversation (allow_reentry=True)
 """
 
 from __future__ import annotations
@@ -31,111 +38,127 @@ from bot.utils.auth import restricted
 
 logger = logging.getLogger(__name__)
 
-SELECT_BROKER, UPLOAD_FILE, SELECT_ACCOUNT, IMPORT_CONFIRM = range(4)
+UPLOAD_FILE, SELECT_BROKER, SELECT_ACCOUNT, IMPORT_CONFIRM = range(4)
 
 _ACCT_PREFIX = "acct:"
 _CONFIRM_CB = "import_confirm"
 _CANCEL_CB = "import_cancel"
+_CANCEL_TEXT = "❌ Cancel"
 
 
 @restricted
 async def import_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Entry point: show available brokers."""
+    """Entry point: ask for the CSV file directly."""
     if not update.message:
         return ConversationHandler.END
 
-    parsers = get_all_parsers()
-    if not parsers:
-        await update.message.reply_text("No parsers available yet.")
-        return ConversationHandler.END
-
-    broker_names = [p.name for p in (cls() for cls in parsers.values())]
-    keyboard = [broker_names[i : i + 2] for i in range(0, len(broker_names), 2)]
-    keyboard.append(["Auto-detect"])
-
+    _clear_import_state(context)
     await update.message.reply_text(
-        "Which broker is this CSV from?",
-        reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=True),
-    )
-    return SELECT_BROKER
-
-
-async def import_select_broker(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Store selected broker, ask for CSV file."""
-    if not update.message:
-        return ConversationHandler.END
-
-    text = update.message.text.strip()
-
-    if text == "Auto-detect":
-        context.user_data["import_broker"] = "auto"
-    else:
-        parsers = get_all_parsers()
-        matched = None
-        for slug, cls in parsers.items():
-            if cls().name == text:
-                matched = slug
-                break
-
-        if not matched:
-            await update.message.reply_text("Unknown broker. Try again or choose Auto-detect.")
-            return SELECT_BROKER
-
-        context.user_data["import_broker"] = matched
-
-    await update.message.reply_text(
-        "Send me the CSV file.",
+        "Send me the CSV file and I'll detect the broker automatically.\n\nSend /cancel to abort.",
         reply_markup=ReplyKeyboardRemove(),
     )
     return UPLOAD_FILE
 
 
 async def import_receive_file(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Receive CSV, parse it, then show account selection."""
+    """Receive CSV, auto-detect broker, then show account selection."""
     if not update.message or not update.message.document:
         if update.message:
-            await update.message.reply_text("Please send a CSV file as a document attachment.")
+            await update.message.reply_text(
+                "Please send a CSV file as a document attachment. Send /cancel to abort."
+            )
         return UPLOAD_FILE
 
     doc = update.message.document
     if not doc.file_name or not doc.file_name.lower().endswith(".csv"):
-        await update.message.reply_text("Please send a .csv file.")
+        await update.message.reply_text(
+            "Please send a .csv file. Send /cancel to abort."
+        )
         return UPLOAD_FILE
 
-    await update.message.reply_text(f"Processing `{doc.file_name}`…", parse_mode="Markdown")
+    await update.message.reply_text(
+        f"Processing `{doc.file_name}`…",
+        parse_mode="Markdown",
+        reply_markup=ReplyKeyboardRemove(),
+    )
 
     tg_file = await doc.get_file(read_timeout=30)
     file_bytes = await tg_file.download_as_bytearray(read_timeout=30)
     csv_content = file_bytes.decode("utf-8-sig")
 
-    broker_slug = context.user_data.get("import_broker", "auto")
+    parser = auto_detect_parser(csv_content)
+    if not parser:
+        context.user_data["csv_content"] = csv_content
+        keyboard = _broker_keyboard()
+        await update.message.reply_text(
+            "Could not detect the broker format automatically.\n"
+            "Which broker is this CSV from? Send /cancel to abort.",
+            reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True),
+        )
+        return SELECT_BROKER
 
+    await update.message.reply_text(
+        f"Detected format: *{parser.name}*", parse_mode="Markdown"
+    )
+    return await _process_csv(update, context, csv_content, parser.slug)
+
+
+async def import_select_broker(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Fallback: user manually picked a broker after auto-detect failed."""
+    if not update.message:
+        return ConversationHandler.END
+
+    text = update.message.text.strip()
+    parsers = get_all_parsers()
+    matched = None
+    for slug, cls in parsers.items():
+        if cls().name == text:
+            matched = slug
+            break
+
+    if not matched:
+        keyboard = _broker_keyboard()
+        await update.message.reply_text(
+            "Unknown broker. Please choose one from the list:",
+            reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True),
+        )
+        return SELECT_BROKER
+
+    context.user_data["import_broker"] = matched
+    csv_content = context.user_data.get("csv_content")
+    if not csv_content:
+        await update.message.reply_text(
+            "Session expired. Please run /import again.",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+        _clear_import_state(context)
+        return ConversationHandler.END
+
+    return await _process_csv(update, context, csv_content, matched)
+
+
+async def _process_csv(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    csv_content: str,
+    broker_slug: str,
+) -> int:
+    """Parse CSV with the given broker slug and proceed to account selection."""
     try:
-        if broker_slug == "auto":
-            parser = auto_detect_parser(csv_content)
-            if not parser:
-                await update.message.reply_text(
-                    "Could not auto-detect the broker format. "
-                    "Try /import again and select the broker manually."
-                )
-                return ConversationHandler.END
-            await update.message.reply_text(
-                f"Detected format: *{parser.name}*", parse_mode="Markdown"
-            )
-        else:
-            parser = get_parser(broker_slug)
-
+        parser = get_parser(broker_slug)
         activities = parser.parse(csv_content)
 
         if not activities:
-            await update.message.reply_text("No importable activities found in this CSV.")
+            await update.message.reply_text(
+                "No importable activities found in this CSV.",
+                reply_markup=ReplyKeyboardRemove(),
+            )
+            _clear_import_state(context)
             return ConversationHandler.END
 
-        # Store parsed activities (without accountId yet) for the next step
         context.user_data["pending_activities"] = activities
         context.user_data["pending_parser_name"] = parser.name
 
-        # Fetch Ghostfolio accounts to let the user choose
         async with GhostfolioClient(
             settings.ghostfolio_url, settings.ghostfolio_access_token
         ) as gf:
@@ -157,7 +180,6 @@ async def import_receive_file(update: Update, context: ContextTypes.DEFAULT_TYPE
         if row:
             buttons.append(row)
 
-        # Fallback button using the account from config
         if settings.ghostfolio_account_id:
             buttons.append([
                 InlineKeyboardButton(
@@ -166,13 +188,15 @@ async def import_receive_file(update: Update, context: ContextTypes.DEFAULT_TYPE
                 )
             ])
 
-        buttons.append([InlineKeyboardButton("❌ Cancel", callback_data=_CANCEL_CB)])
+        buttons.append([InlineKeyboardButton(_CANCEL_TEXT, callback_data=_CANCEL_CB)])
 
-        if not buttons or (len(buttons) == 1 and buttons[0][0].callback_data == _CANCEL_CB):
+        if len(buttons) == 1:  # only the cancel button — no accounts found
             await update.message.reply_text(
                 "No accounts found in Ghostfolio. "
-                "Please create an account first, then retry."
+                "Please create an account first, then retry.",
+                reply_markup=ReplyKeyboardRemove(),
             )
+            _clear_import_state(context)
             return ConversationHandler.END
 
         await update.message.reply_text(
@@ -183,13 +207,17 @@ async def import_receive_file(update: Update, context: ContextTypes.DEFAULT_TYPE
         return SELECT_ACCOUNT
 
     except ValueError as e:
-        await update.message.reply_text(f"Parse error: {e}")
+        await update.message.reply_text(f"Parse error: {e}", reply_markup=ReplyKeyboardRemove())
     except GhostfolioError as e:
         logger.error("Ghostfolio error during file processing: %s", e)
-        await update.message.reply_text(f"Ghostfolio error: {e.detail}")
+        await update.message.reply_text(
+            f"Ghostfolio error: {e.detail}", reply_markup=ReplyKeyboardRemove()
+        )
     except Exception:
         logger.exception("Unexpected error in /import file step")
-        await update.message.reply_text("Unexpected error processing the CSV.")
+        await update.message.reply_text(
+            "Unexpected error processing the CSV.", reply_markup=ReplyKeyboardRemove()
+        )
 
     _clear_import_state(context)
     return ConversationHandler.END
@@ -250,7 +278,6 @@ async def import_select_account_cb(update: Update, context: ContextTypes.DEFAULT
             _clear_import_state(context)
             return ConversationHandler.END
 
-        # Build preview (up to 20 rows)
         lines = [
             f"Found *{len(activity_dicts)}* activities in CSV",
             f"Existing in Ghostfolio: {len(existing_list)}",
@@ -271,7 +298,7 @@ async def import_select_account_cb(update: Update, context: ContextTypes.DEFAULT
 
         keyboard = [[
             InlineKeyboardButton(f"✅ Import {len(to_import)}", callback_data=_CONFIRM_CB),
-            InlineKeyboardButton("❌ Cancel", callback_data=_CANCEL_CB),
+            InlineKeyboardButton(_CANCEL_TEXT, callback_data=_CANCEL_CB),
         ]]
         await query.edit_message_text(
             "\n".join(lines),
@@ -352,8 +379,15 @@ async def import_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     return ConversationHandler.END
 
 
+def _broker_keyboard() -> list[list[str]]:
+    """Build a reply keyboard with all registered broker names."""
+    parsers = get_all_parsers()
+    names = [cls().name for cls in parsers.values()]
+    return [names[i : i + 2] for i in range(0, len(names), 2)]
+
+
 def _clear_import_state(context: ContextTypes.DEFAULT_TYPE) -> None:
-    for key in ("import_broker", "pending_activities", "pending_import", "pending_parser_name"):
+    for key in ("import_broker", "csv_content", "pending_activities", "pending_import", "pending_parser_name"):
         context.user_data.pop(key, None)
 
 
@@ -362,12 +396,11 @@ def build_import_conversation() -> ConversationHandler:
     return ConversationHandler(
         entry_points=[CommandHandler("import", import_start)],
         states={
-            SELECT_BROKER: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, import_select_broker),
-            ],
             UPLOAD_FILE: [
                 MessageHandler(filters.Document.ALL, import_receive_file),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, import_receive_file),
+            ],
+            SELECT_BROKER: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, import_select_broker),
             ],
             SELECT_ACCOUNT: [
                 CallbackQueryHandler(
@@ -383,4 +416,5 @@ def build_import_conversation() -> ConversationHandler:
             ],
         },
         fallbacks=[CommandHandler("cancel", import_cancel)],
+        allow_reentry=True,
     )
