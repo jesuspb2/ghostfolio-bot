@@ -3,6 +3,7 @@ examples/
 CLAUDE.md
 prompt.md
 .env
+data/
 
 # Python
 __pycache__/
