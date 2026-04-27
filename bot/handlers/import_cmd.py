@@ -64,6 +64,7 @@ async def import_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 
 async def import_receive_file(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Receive CSV, auto-detect broker, then show account selection."""
+    _clear_import_state(context)
     if not update.message or not update.message.document:
         if update.message:
             await update.message.reply_text(
@@ -344,7 +345,7 @@ async def import_confirm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         async with GhostfolioClient(
             settings.ghostfolio_url, settings.ghostfolio_access_token
         ) as gf:
-            created = await gf.import_activities(to_import)
+            created, skipped_symbols = await gf.import_activities(to_import)
 
         types_count: dict[str, int] = {}
         for a in to_import:
@@ -354,7 +355,13 @@ async def import_confirm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         for t, c in sorted(types_count.items()):
             summary_lines.append(f"  {t}: {c}")
 
-        if created < len(to_import):
+        if skipped_symbols:
+            unique = sorted(set(skipped_symbols))
+            summary_lines.append(
+                f"\n⚠️ *{len(skipped_symbols)} activities skipped* — symbol not found on data source:\n"
+                + ", ".join(f"`{s}`" for s in unique)
+            )
+        elif created < len(to_import):
             rejected = len(to_import) - created
             summary_lines.append(
                 f"\n⚠️ *{rejected} activities rejected by Ghostfolio* — "
@@ -398,7 +405,10 @@ def _clear_import_state(context: ContextTypes.DEFAULT_TYPE) -> None:
 def build_import_conversation() -> ConversationHandler:
     """Build and return the ConversationHandler for /import."""
     return ConversationHandler(
-        entry_points=[CommandHandler("import", import_start)],
+        entry_points=[
+            CommandHandler("import", import_start),
+            MessageHandler(filters.Document.FileExtension("csv"), import_receive_file),
+        ],
         states={
             UPLOAD_FILE: [
                 MessageHandler(filters.Document.ALL, import_receive_file),

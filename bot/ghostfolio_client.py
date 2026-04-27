@@ -149,40 +149,55 @@ class GhostfolioClient:
 
     async def import_activities(
         self, activities: list[dict[str, Any]], chunk_size: int = 25
-    ) -> int:
+    ) -> tuple[int, list[str]]:
         """POST /api/v1/import — bulk import activities.
 
         Ghostfolio.io caps bulk imports at 25 activities per request; self-hosted
         instances have no limit.  The default chunk_size=25 is safe for both.
 
-        Returns the number of activities Ghostfolio confirmed as created.
+        When a chunk fails because a symbol is not found on the data source,
+        retries each activity individually so the rest can still be imported.
+
+        Returns (imported_count, skipped_symbols).
         """
         logger.info("Importing %d activities into Ghostfolio", len(activities))
         logger.info("Import payload (first 3): %s", activities[:3])
         chunks = [activities[i : i + chunk_size] for i in range(0, len(activities), chunk_size)]
         total_created = 0
+        skipped: list[str] = []
+
         for chunk in chunks:
-            resp = await self._request("POST", "/import", json={"activities": chunk})
-            logger.info("Ghostfolio /import response: %s", resp)
-            if isinstance(resp, dict) and "activities" in resp:
-                created = len(resp["activities"])
-                total_created += created
-            else:
-                # 201 with no body or unknown format — assume all created
-                total_created += len(chunk)
-        if total_created != len(activities):
-            logger.warning(
-                "Ghostfolio created %d/%d activities — %d were silently rejected "
-                "(check accountId, symbol, and dataSource)",
-                total_created,
-                len(activities),
-                len(activities) - total_created,
-            )
-        else:
-            logger.info(
-                "Successfully imported %d activities (%d chunk(s))", len(activities), len(chunks)
-            )
-        return total_created
+            try:
+                resp = await self._request("POST", "/import", json={"activities": chunk})
+                logger.info("Ghostfolio /import response: %s", resp)
+                if isinstance(resp, dict) and "activities" in resp:
+                    total_created += len(resp["activities"])
+                else:
+                    total_created += len(chunk)
+            except GhostfolioError as e:
+                if e.status_code == 400 and "is not valid for the specified data source" in e.detail:
+                    # Retry one-by-one so valid activities still get imported
+                    for activity in chunk:
+                        try:
+                            resp = await self._request("POST", "/import", json={"activities": [activity]})
+                            if isinstance(resp, dict) and "activities" in resp:
+                                total_created += len(resp["activities"])
+                            else:
+                                total_created += 1
+                        except GhostfolioError as inner:
+                            if inner.status_code == 400 and "is not valid for the specified data source" in inner.detail:
+                                symbol = activity.get("symbol", "?")
+                                skipped.append(symbol)
+                                logger.warning("Skipping activity with unresolvable symbol: %s", symbol)
+                            else:
+                                raise
+                else:
+                    raise
+
+        if skipped:
+            logger.warning("Skipped %d activities with unknown symbols: %s", len(skipped), skipped)
+        logger.info("Successfully imported %d/%d activities", total_created, len(activities))
+        return total_created, skipped
 
     async def add_activity(
         self,

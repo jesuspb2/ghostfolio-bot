@@ -9,12 +9,15 @@ from bot.parsers.base import (
     register_parser,
 )
 from bot.parsers.delta import DeltaParser
+from bot.parsers.ibkr import IbkrDividendsParser, IbkrTradesParser
 from bot.parsers.revolut import RevolutCryptoParser, RevolutInvestParser, RevolutSavingsParser
 
 __all__ = [
     "BrokerParser",
     "DeltaParser",
     "GhostfolioActivity",
+    "IbkrDividendsParser",
+    "IbkrTradesParser",
     "RevolutCryptoParser",
     "RevolutInvestParser",
     "RevolutSavingsParser",

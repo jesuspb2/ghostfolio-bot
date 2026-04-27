@@ -99,7 +99,7 @@ async def test_import_activities(mock_api):
     mock_api.post("/import").mock(return_value=Response(201, text=""))
 
     async with GhostfolioClient(BASE_URL, ACCESS_TOKEN) as gf:
-        await gf.import_activities([{
+        created, skipped = await gf.import_activities([{
             "currency": "EUR",
             "dataSource": "YAHOO",
             "date": "2024-01-01T00:00:00.000Z",
@@ -109,6 +109,47 @@ async def test_import_activities(mock_api):
             "type": "BUY",
             "unitPrice": 100.0,
         }])
+    assert created == 1
+    assert skipped == []
+
+
+@pytest.mark.asyncio
+async def test_import_activities_skips_unknown_symbols(mock_api):
+    """When a chunk fails with an invalid-symbol error, retry individually and skip bad ones."""
+    invalid_error = Response(
+        400,
+        json={"error": "Bad Request", "message": ['activities.0.symbol ("ZKJ-EUR") is not valid for the specified data source ("YAHOO")']},
+    )
+    ok_response = Response(201, text="")
+
+    call_count = 0
+
+    def side_effect(request, *args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        # First call (chunk of 2) → 400; then retry individually
+        if call_count == 1:
+            return invalid_error
+        # Second call: ZKJ-EUR → still 400
+        body = request.content.decode()
+        if "ZKJ-EUR" in body:
+            return invalid_error
+        return ok_response
+
+    mock_api.post("/import").mock(side_effect=side_effect)
+
+    activities = [
+        {"symbol": "ZKJ-EUR", "dataSource": "YAHOO", "type": "SELL", "quantity": 47.0,
+         "unitPrice": 0.02, "currency": "EUR", "fee": 0.0, "date": "2026-03-01T00:00:00.000Z"},
+        {"symbol": "BTC-EUR", "dataSource": "YAHOO", "type": "BUY", "quantity": 0.00003773,
+         "unitPrice": 57180.10, "currency": "EUR", "fee": 0.0, "date": "2026-03-01T00:00:00.000Z"},
+    ]
+
+    async with GhostfolioClient(BASE_URL, ACCESS_TOKEN) as gf:
+        created, skipped = await gf.import_activities(activities)
+
+    assert created == 1
+    assert skipped == ["ZKJ-EUR"]
 
 
 @pytest.mark.asyncio

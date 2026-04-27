@@ -43,7 +43,7 @@ def test_buy_sek() -> None:
     assert btc_sek[0].unit_price == 89162.28
     assert btc_sek[0].currency == "SEK"
     assert btc_sek[0].fee == 0.0
-    assert btc_sek[0].data_source == "MANUAL"
+    assert btc_sek[0].data_source == "YAHOO"
 
 
 def test_buy_eur() -> None:

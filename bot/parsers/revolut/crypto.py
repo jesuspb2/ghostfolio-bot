@@ -6,9 +6,11 @@ Type mapping:
   Buy            → BUY
   Sell           → SELL
   Staking reward → DIVIDEND
+  Learn reward   → INTEREST
   Send / Receive / Stake / Exchange → SKIP
 
-Symbol is constructed as {CRYPTO}-{FIAT} (e.g. BTC-EUR), dataSource=MANUAL.
+Symbol is constructed as {CRYPTO}-{FIAT} (e.g. BTC-EUR), dataSource=YAHOO.
+Yahoo Finance supports crypto pairs like BTC-EUR, ZKJ-EUR, etc.
 Price, Value and Fees fields embed the currency symbol/code:
   "89,162.28 SEK", "€35,761.54", "$105,058.55"
 
@@ -88,6 +90,8 @@ class RevolutCryptoParser(BrokerParser):
             activity_type = "SELL"
         elif "staking reward" in type_lower:
             activity_type = "DIVIDEND"
+        elif "learn reward" in type_lower or "reward" in type_lower:
+            activity_type = "INTEREST"
         else:
             logger.debug("Skipping unknown Revolut Crypto type '%s'", raw_type)
             return None
@@ -104,7 +108,7 @@ class RevolutCryptoParser(BrokerParser):
         currency = price_currency or value_currency or "EUR"
         ghostfolio_symbol = f"{crypto_symbol}-{currency}"
 
-        if activity_type == "DIVIDEND":
+        if activity_type in ("DIVIDEND", "INTEREST"):
             unit_price = value_val if value_val else 0.0
             quantity_out = 1.0
         else:
@@ -120,7 +124,7 @@ class RevolutCryptoParser(BrokerParser):
 
         return GhostfolioActivity(
             currency=currency,
-            data_source="MANUAL",
+            data_source="YAHOO",
             date=date,
             fee=fee_val,
             quantity=quantity_out,
