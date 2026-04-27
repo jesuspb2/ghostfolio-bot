@@ -64,13 +64,23 @@ class GhostfolioClient:
     # -- Auth ------------------------------------------------------------------
 
     async def _authenticate(self) -> None:
-        """Exchange the access token for a short-lived bearer token."""
+        """Exchange the access token for a short-lived bearer token.
+
+        Ghostfolio has two auth endpoints depending on version:
+        - Newer: POST /api/v1/auth/anonymous  body={"accessToken": "..."}  → 200 or 201
+        - Older: GET  /api/v1/auth/anonymous/{token}                        → 200
+        We try POST first; fall back to GET if the server returns 404.
+        """
         logger.debug("Authenticating with Ghostfolio at %s", self._base_url)
         resp = await self.http.post(
             "/auth/anonymous",
             json={"accessToken": self._access_token},
         )
-        if resp.status_code != 201:
+        if resp.status_code == 404:
+            logger.debug("POST /auth/anonymous returned 404, trying GET endpoint")
+            resp = await self.http.get(f"/auth/anonymous/{self._access_token}")
+
+        if resp.status_code not in (200, 201):
             raise GhostfolioError(resp.status_code, "Authentication failed")
         data = resp.json()
         self._bearer_token = data.get("authToken")
@@ -121,9 +131,8 @@ class GhostfolioClient:
         range_ accepted values: 1d, wtd, mtd, ytd, 1y, 5y, max
         """
         logger.info("Fetching portfolio performance (range=%s)", range_)
-        return await self._request(
-            "GET", "/portfolio/performance", params={"range": range_}
-        )
+        url = f"{self._base_url}/api/v2/portfolio/performance?range={range_}"
+        return await self._request("GET", url)
 
     async def portfolio_holdings(self) -> dict[str, Any]:
         """GET /api/v1/portfolio/holdings — current positions."""
@@ -138,15 +147,42 @@ class GhostfolioClient:
         params = {"accounts": account_id} if account_id else None
         return await self._request("GET", "/order", params=params)
 
-    async def import_activities(self, activities: list[dict[str, Any]]) -> None:
+    async def import_activities(
+        self, activities: list[dict[str, Any]], chunk_size: int = 25
+    ) -> int:
         """POST /api/v1/import — bulk import activities.
 
-        Each activity dict must contain:
-            currency, dataSource, date, fee, quantity, symbol, type, unitPrice
+        Ghostfolio.io caps bulk imports at 25 activities per request; self-hosted
+        instances have no limit.  The default chunk_size=25 is safe for both.
+
+        Returns the number of activities Ghostfolio confirmed as created.
         """
         logger.info("Importing %d activities into Ghostfolio", len(activities))
-        await self._request("POST", "/import", json={"activities": activities})
-        logger.info("Successfully imported %d activities", len(activities))
+        logger.info("Import payload (first 3): %s", activities[:3])
+        chunks = [activities[i : i + chunk_size] for i in range(0, len(activities), chunk_size)]
+        total_created = 0
+        for chunk in chunks:
+            resp = await self._request("POST", "/import", json={"activities": chunk})
+            logger.info("Ghostfolio /import response: %s", resp)
+            if isinstance(resp, dict) and "activities" in resp:
+                created = len(resp["activities"])
+                total_created += created
+            else:
+                # 201 with no body or unknown format — assume all created
+                total_created += len(chunk)
+        if total_created != len(activities):
+            logger.warning(
+                "Ghostfolio created %d/%d activities — %d were silently rejected "
+                "(check accountId, symbol, and dataSource)",
+                total_created,
+                len(activities),
+                len(activities) - total_created,
+            )
+        else:
+            logger.info(
+                "Successfully imported %d activities (%d chunk(s))", len(activities), len(chunks)
+            )
+        return total_created
 
     async def add_activity(
         self,
@@ -193,3 +229,99 @@ class GhostfolioClient:
         """GET /api/v1/export — full JSON export of all activities."""
         logger.info("Exporting full Ghostfolio data")
         return await self._request("GET", "/export")
+
+
+# -- Deduplication -------------------------------------------------------------
+
+def build_manual_symbol_map(existing_activities: list[dict[str, Any]]) -> dict[str, str]:
+    """Build a mapping from human symbol (ISIN/name) → SymbolProfile UUID.
+
+    Ghostfolio stores MANUAL activities internally with a UUID as
+    SymbolProfile.symbol and the original imported string as SymbolProfile.name.
+    When re-importing or deduplicating, we must use the UUID, not the ISIN.
+    """
+    symbol_map: dict[str, str] = {}
+    for a in existing_activities:
+        sp = a.get("SymbolProfile") or {}
+        if sp.get("dataSource") != "MANUAL":
+            continue
+        name = sp.get("name", "")   # the ISIN/string we originally imported
+        uuid = sp.get("symbol", "")  # the UUID Ghostfolio assigned internally
+        if name and uuid and name != uuid:
+            symbol_map[name] = uuid
+    if symbol_map:
+        logger.info("Built MANUAL symbol map: %s", symbol_map)
+    return symbol_map
+
+
+def resolve_manual_symbols(
+    activities: list[dict[str, Any]],
+    symbol_map: dict[str, str],
+) -> list[dict[str, Any]]:
+    """Replace ISIN/human symbols with their Ghostfolio UUIDs for MANUAL activities.
+
+    Mutates activities in-place and returns the list for convenience.
+    Ghostfolio requires the SymbolProfile UUID (not the original ISIN) when
+    importing MANUAL activities that already have a SymbolProfile.
+    """
+    for a in activities:
+        if a.get("dataSource") == "MANUAL":
+            isin = a.get("symbol", "")
+            uuid = symbol_map.get(isin)
+            if uuid:
+                a["symbol"] = uuid
+    return activities
+
+
+def _existing_key(activity: dict[str, Any]) -> tuple[str, str, str, float, str]:
+    """Stable key for an activity already stored in Ghostfolio.
+
+    For MANUAL activities Ghostfolio stores the UUID in SymbolProfile.symbol.
+    We use the UUID consistently so new activities (after symbol resolution)
+    produce the same key.
+    """
+    sp = activity.get("SymbolProfile") or {}
+    if sp.get("dataSource") == "MANUAL":
+        # UUID is in sp.symbol; fallback to name then top-level symbol
+        symbol = sp.get("symbol") or sp.get("name") or activity.get("symbol", "")
+    else:
+        symbol = sp.get("symbol") or sp.get("name") or activity.get("symbol", "")
+    return (
+        activity.get("date", "")[:10],
+        symbol,
+        activity.get("type", ""),
+        round(float(activity.get("quantity", 0)), 4),
+        activity.get("accountId", ""),
+    )
+
+
+def deduplicate_activities(
+    new_activities: list[dict[str, Any]],
+    existing_activities: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return only the activities not already present in Ghostfolio.
+
+    Keyed on date (date-only) + symbol UUID + type + quantity + accountId.
+    Call resolve_manual_symbols() on new_activities before this function so
+    MANUAL symbols use UUIDs that match what Ghostfolio returns.
+    """
+    existing_keys = {_existing_key(a) for a in existing_activities}
+
+    def _new_key(a: dict[str, Any]) -> tuple[str, str, str, float, str]:
+        return (
+            a.get("date", "")[:10],
+            a.get("symbol", ""),
+            a.get("type", ""),
+            round(float(a.get("quantity", 0)), 4),
+            a.get("accountId", ""),
+        )
+
+    result = [a for a in new_activities if _new_key(a) not in existing_keys]
+    logger.info(
+        "Dedup: %d existing, %d new → %d to import (%d duplicates skipped)",
+        len(existing_activities),
+        len(new_activities),
+        len(result),
+        len(new_activities) - len(result),
+    )
+    return result

@@ -58,14 +58,17 @@ async def test_portfolio_holdings(mock_api):
 
 
 @pytest.mark.asyncio
-async def test_portfolio_performance(mock_api):
-    mock_api.get("/portfolio/performance").mock(
-        return_value=Response(200, json={"performance": {"currentValue": 10000}})
-    )
-
-    async with GhostfolioClient(BASE_URL, ACCESS_TOKEN) as gf:
-        data = await gf.portfolio_performance(range_="ytd")
-        assert "performance" in data
+async def test_portfolio_performance():
+    with respx.mock() as mock:
+        mock.post(f"{BASE_URL}/api/v1/auth/anonymous").mock(
+            return_value=Response(201, json={"authToken": "bearer-xyz"})
+        )
+        mock.get(f"{BASE_URL}/api/v2/portfolio/performance").mock(
+            return_value=Response(200, json={"performance": {"currentValue": 10000}})
+        )
+        async with GhostfolioClient(BASE_URL, ACCESS_TOKEN) as gf:
+            data = await gf.portfolio_performance(range_="ytd")
+            assert "performance" in data
 
 
 @pytest.mark.asyncio

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import difflib
 import io
 import logging
 from abc import ABC, abstractmethod
@@ -11,6 +12,8 @@ from datetime import datetime
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+_DETECT_THRESHOLD = 0.6
 
 
 @dataclass
@@ -34,12 +37,13 @@ class GhostfolioActivity:
             "comment": self.comment,
             "currency": self.currency,
             "dataSource": self.data_source,
-            "date": self.date.strftime("%Y-%m-%dT00:00:00.000Z"),
+            "date": self.date.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
             "fee": self.fee,
             "quantity": self.quantity,
             "symbol": self.symbol,
             "type": self.type,
             "unitPrice": self.unit_price,
+            "updateAccountBalance": False,
         }
 
 
@@ -48,18 +52,41 @@ class BrokerParser(ABC):
 
     name: str = "Unknown"
     slug: str = "unknown"
+    HEADER_SIGNATURE: str = ""
+    DELIMITER: str = ","
+
+    @classmethod
+    def detect(cls, header_line: str) -> float:
+        """Return similarity score 0.0–1.0 against HEADER_SIGNATURE."""
+        if not cls.HEADER_SIGNATURE:
+            return 0.0
+        return difflib.SequenceMatcher(
+            None, header_line.strip(), cls.HEADER_SIGNATURE
+        ).ratio()
+
+    def can_handle(self, csv_content: str) -> bool:
+        """Return True if this parser can handle the given CSV content."""
+        header = _extract_header(csv_content)
+        return type(self).detect(header) >= _DETECT_THRESHOLD
 
     @abstractmethod
     def parse(self, csv_content: str) -> list[GhostfolioActivity]:
         """Parse CSV content into a list of Ghostfolio activities."""
         ...
 
-    def can_handle(self, csv_content: str) -> bool:
-        """Auto-detect whether this parser can handle the given CSV."""
-        return False
-
     def _read_csv(self, content: str) -> list[dict[str, str]]:
         """Helper: parse CSV string into list of row dicts, trying common delimiters."""
+        delimiters = [self.DELIMITER] if self.DELIMITER else [",", ";", "\t"]
+        for delimiter in delimiters:
+            try:
+                reader = csv.DictReader(io.StringIO(content), delimiter=delimiter)
+                rows = list(reader)
+                if rows and reader.fieldnames and len(reader.fieldnames) > 1:
+                    return rows
+            except Exception:
+                continue
+
+        # Fallback: try all common delimiters
         for delimiter in [",", ";", "\t"]:
             try:
                 reader = csv.DictReader(io.StringIO(content), delimiter=delimiter)
@@ -70,6 +97,15 @@ class BrokerParser(ABC):
                 continue
 
         raise ValueError("Could not parse CSV with any common delimiter")
+
+
+def _extract_header(csv_content: str) -> str:
+    """Return the first line that looks like a CSV header (has comma or semicolon)."""
+    for line in csv_content.splitlines():
+        stripped = line.strip()
+        if stripped and ("," in stripped or ";" in stripped):
+            return stripped
+    return ""
 
 
 # -- Parser registry -----------------------------------------------------------
@@ -97,10 +133,24 @@ def get_all_parsers() -> dict[str, type[BrokerParser]]:
 
 
 def auto_detect_parser(csv_content: str) -> BrokerParser | None:
-    """Try to auto-detect which parser can handle the CSV content."""
+    """Auto-detect the best parser for the given CSV using header similarity scoring."""
+    header = _extract_header(csv_content)
+    if not header:
+        return None
+
+    best_score = 0.0
+    best_cls: type[BrokerParser] | None = None
+
     for parser_cls in _PARSERS.values():
-        parser = parser_cls()
-        if parser.can_handle(csv_content):
-            logger.info("Auto-detected parser: %s", parser.name)
-            return parser
+        score = parser_cls.detect(header)
+        if score > best_score:
+            best_score = score
+            best_cls = parser_cls
+
+    if best_cls is not None and best_score >= _DETECT_THRESHOLD:
+        logger.info(
+            "Auto-detected parser '%s' (score=%.2f)", best_cls.name, best_score
+        )
+        return best_cls()
+
     return None

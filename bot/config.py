@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -24,17 +22,14 @@ class Settings(BaseSettings):
     ghostfolio_access_token: str
     ghostfolio_account_id: str
 
-    # Backup
-    backup_provider: str = "local"  # "local" | "telegram"
-    backup_local_path: Path = Path("./backups")
-    backup_cron: str = "0 3 * * *"
-
     # Logging
     log_level: str = "INFO"
 
     @field_validator("telegram_allowed_users", mode="before")
     @classmethod
-    def parse_allowed_users(cls, v: str | list[int]) -> list[int]:
+    def parse_allowed_users(cls, v: str | list[int] | int) -> list[int]:
+        if isinstance(v, int):
+            return [v]
         if isinstance(v, str):
             if not v.strip():
                 return []
