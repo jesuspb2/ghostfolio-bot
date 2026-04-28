@@ -55,6 +55,9 @@ class BrokerParser(ABC):
     HEADER_SIGNATURE: str = ""
     DELIMITER: str = ","
 
+    def __init__(self) -> None:
+        self.warnings: list[str] = []
+
     @classmethod
     def detect(cls, header_line: str) -> float:
         """Return similarity score 0.0–1.0 against HEADER_SIGNATURE."""

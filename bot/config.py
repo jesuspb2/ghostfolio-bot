@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -21,6 +23,9 @@ class Settings(BaseSettings):
     ghostfolio_url: str = "http://localhost:3333"
     ghostfolio_access_token: str
     ghostfolio_account_id: str
+
+    # Import mode: "direct" = POST to Ghostfolio; "json" = send JSON file for manual import
+    import_mode: Literal["direct", "json"] = "json"
 
     # Logging
     log_level: str = "INFO"

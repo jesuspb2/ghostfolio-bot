@@ -147,6 +147,33 @@ class GhostfolioClient:
         params = {"accounts": account_id} if account_id else None
         return await self._request("GET", "/order", params=params)
 
+    async def validate_activities(
+        self, activities: list[dict[str, Any]], chunk_size: int = 25
+    ) -> list[str]:
+        """POST /api/v1/import?dryRun=true — validate without persisting.
+
+        Sends activities in chunks (same limit as real import) and collects any
+        error messages from Ghostfolio.  Returns a list of error strings; an
+        empty list means all activities are valid.
+        """
+        logger.info("Dry-run validating %d activities", len(activities))
+        chunks = [activities[i : i + chunk_size] for i in range(0, len(activities), chunk_size)]
+        errors: list[str] = []
+
+        for chunk in chunks:
+            try:
+                await self._request(
+                    "POST", "/import", params={"dryRun": "true"}, json={"activities": chunk}
+                )
+            except GhostfolioError as e:
+                errors.append(e.detail[:200])
+
+        if errors:
+            logger.warning("Dry-run validation found %d error(s): %s", len(errors), errors)
+        else:
+            logger.info("Dry-run validation passed for all activities")
+        return errors
+
     async def import_activities(
         self, activities: list[dict[str, Any]], chunk_size: int = 25
     ) -> tuple[int, list[str]]:
@@ -175,7 +202,10 @@ class GhostfolioClient:
                 else:
                     total_created += len(chunk)
             except GhostfolioError as e:
-                if e.status_code == 400 and "is not valid for the specified data source" in e.detail:
+                _is_retryable = e.status_code == 500 or (
+                    e.status_code == 400 and "is not valid for the specified data source" in e.detail
+                )
+                if _is_retryable:
                     # Retry one-by-one so valid activities still get imported
                     for activity in chunk:
                         try:
@@ -185,10 +215,17 @@ class GhostfolioClient:
                             else:
                                 total_created += 1
                         except GhostfolioError as inner:
-                            if inner.status_code == 400 and "is not valid for the specified data source" in inner.detail:
+                            _inner_retryable = inner.status_code == 500 or (
+                                inner.status_code == 400
+                                and "is not valid for the specified data source" in inner.detail
+                            )
+                            if _inner_retryable:
                                 symbol = activity.get("symbol", "?")
                                 skipped.append(symbol)
-                                logger.warning("Skipping activity with unresolvable symbol: %s", symbol)
+                                logger.warning(
+                                    "Skipping activity (status=%d): %s — %s",
+                                    inner.status_code, symbol, inner.detail[:120],
+                                )
                             else:
                                 raise
                 else:
