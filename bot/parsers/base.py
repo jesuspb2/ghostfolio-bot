@@ -67,6 +67,11 @@ class BrokerParser(ABC):
             None, header_line.strip(), cls.HEADER_SIGNATURE
         ).ratio()
 
+    @classmethod
+    def detect_binary(cls, file_bytes: bytes) -> float:
+        """Return similarity score 0.0–1.0 for binary (e.g. XLS) file detection."""
+        return 0.0
+
     def can_handle(self, csv_content: str) -> bool:
         """Return True if this parser can handle the given CSV content."""
         header = _extract_header(csv_content)
@@ -76,6 +81,10 @@ class BrokerParser(ABC):
     def parse(self, csv_content: str) -> list[GhostfolioActivity]:
         """Parse CSV content into a list of Ghostfolio activities."""
         ...
+
+    def parse_binary(self, file_bytes: bytes) -> list[GhostfolioActivity]:
+        """Parse binary file bytes (e.g. XLS). Override for binary-format parsers."""
+        raise NotImplementedError(f"{type(self).__name__} does not support binary files")
 
     def _read_csv(self, content: str) -> list[dict[str, str]]:
         """Helper: parse CSV string into list of row dicts, trying common delimiters."""
@@ -133,6 +142,26 @@ def get_parser(slug: str) -> BrokerParser:
 def get_all_parsers() -> dict[str, type[BrokerParser]]:
     """Return all registered parsers."""
     return dict(_PARSERS)
+
+
+def auto_detect_parser_binary(file_bytes: bytes) -> BrokerParser | None:
+    """Auto-detect the best parser for a binary file (e.g. XLS) using detect_binary()."""
+    best_score = 0.0
+    best_cls: type[BrokerParser] | None = None
+
+    for parser_cls in _PARSERS.values():
+        score = parser_cls.detect_binary(file_bytes)
+        if score > best_score:
+            best_score = score
+            best_cls = parser_cls
+
+    if best_cls is not None and best_score >= _DETECT_THRESHOLD:
+        logger.info(
+            "Auto-detected binary parser '%s' (score=%.2f)", best_cls.name, best_score
+        )
+        return best_cls()
+
+    return None
 
 
 def auto_detect_parser(csv_content: str) -> BrokerParser | None:

@@ -39,7 +39,7 @@ from bot.ghostfolio_client import (
     deduplicate_activities,
     resolve_manual_symbols,
 )
-from bot.parsers import auto_detect_parser, get_all_parsers, get_parser
+from bot.parsers import auto_detect_parser, auto_detect_parser_binary, get_all_parsers, get_parser
 from bot.parsers.symbol_resolver import resolve_symbols
 from bot.utils.auth import restricted
 
@@ -98,9 +98,10 @@ async def import_receive_file(update: Update, context: ContextTypes.DEFAULT_TYPE
         return UPLOAD_FILE
 
     doc = update.message.document
-    if not doc.file_name or not doc.file_name.lower().endswith(".csv"):
+    fname = (doc.file_name or "").lower()
+    if not (fname.endswith(".csv") or fname.endswith(".xls")):
         await update.message.reply_text(
-            "Please send a .csv file. Send /cancel to abort."
+            "Please send a .csv or .xls file. Send /cancel to abort."
         )
         return UPLOAD_FILE
 
@@ -110,17 +111,29 @@ async def import_receive_file(update: Update, context: ContextTypes.DEFAULT_TYPE
         reply_markup=ReplyKeyboardRemove(),
     )
 
+    is_xls = fname.endswith(".xls")
+
     async with _typing(update.message.chat):
         tg_file = await doc.get_file(read_timeout=30)
-        file_bytes = await tg_file.download_as_bytearray(read_timeout=30)
-        csv_content = file_bytes.decode("utf-8-sig")
-        parser = auto_detect_parser(csv_content)
+        file_bytes = bytes(await tg_file.download_as_bytearray(read_timeout=30))
+
+        if is_xls:
+            parser = auto_detect_parser_binary(file_bytes)
+        else:
+            csv_content = file_bytes.decode("utf-8-sig")
+            parser = auto_detect_parser(csv_content)
+
     if not parser:
-        context.user_data["csv_content"] = csv_content
         keyboard = _broker_keyboard()
+        if is_xls:
+            context.user_data["file_bytes"] = file_bytes
+            context.user_data["is_xls"] = True
+        else:
+            context.user_data["csv_content"] = csv_content
+            context.user_data["is_xls"] = False
         await update.message.reply_text(
             "Could not detect the broker format automatically.\n"
-            "Which broker is this CSV from? Send /cancel to abort.",
+            f"Which broker is this {'XLS' if is_xls else 'CSV'} from? Send /cancel to abort.",
             reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True),
         )
         return SELECT_BROKER
@@ -128,6 +141,8 @@ async def import_receive_file(update: Update, context: ContextTypes.DEFAULT_TYPE
     await update.message.reply_text(
         f"Detected format: *{parser.name}*", parse_mode="Markdown"
     )
+    if is_xls:
+        return await _process_file(update, context, file_bytes=file_bytes, broker_slug=parser.slug)
     return await _process_csv(update, context, csv_content, parser.slug)
 
 
@@ -153,6 +168,19 @@ async def import_select_broker(update: Update, context: ContextTypes.DEFAULT_TYP
         return SELECT_BROKER
 
     context.user_data["import_broker"] = matched
+    is_xls = context.user_data.get("is_xls", False)
+
+    if is_xls:
+        file_bytes = context.user_data.get("file_bytes")
+        if not file_bytes:
+            await update.message.reply_text(
+                "Session expired. Please run /import again.",
+                reply_markup=ReplyKeyboardRemove(),
+            )
+            _clear_import_state(context)
+            return ConversationHandler.END
+        return await _process_file(update, context, file_bytes=file_bytes, broker_slug=matched)
+
     csv_content = context.user_data.get("csv_content")
     if not csv_content:
         await update.message.reply_text(
@@ -163,6 +191,53 @@ async def import_select_broker(update: Update, context: ContextTypes.DEFAULT_TYP
         return ConversationHandler.END
 
     return await _process_csv(update, context, csv_content, matched)
+
+
+async def _process_file(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    file_bytes: bytes,
+    broker_slug: str,
+) -> int:
+    """Parse a binary file (e.g. XLS) with the given broker slug and proceed to account selection."""
+    try:
+        async with _typing(update.message.chat):
+            parser = get_parser(broker_slug)
+            activities = parser.parse_binary(file_bytes)
+
+            if not activities:
+                await update.message.reply_text(
+                    "No importable activities found in this file.",
+                    reply_markup=ReplyKeyboardRemove(),
+                )
+                _clear_import_state(context)
+                return ConversationHandler.END
+
+            context.user_data["pending_activities"] = activities
+            context.user_data["pending_parser_name"] = parser.name
+
+            async with GhostfolioClient(
+                settings.ghostfolio_url, settings.ghostfolio_access_token
+            ) as gf:
+                accounts = await gf.get_accounts()
+
+        return await _show_account_selection(update, context, activities, accounts)
+
+    except ValueError as e:
+        await update.message.reply_text(f"Parse error: {e}", reply_markup=ReplyKeyboardRemove())
+    except GhostfolioError as e:
+        logger.error("Ghostfolio error during file processing: %s", e)
+        await update.message.reply_text(
+            f"Ghostfolio error: {e.detail}", reply_markup=ReplyKeyboardRemove()
+        )
+    except Exception:
+        logger.exception("Unexpected error in /import XLS step")
+        await update.message.reply_text(
+            "Unexpected error processing the file.", reply_markup=ReplyKeyboardRemove()
+        )
+
+    _clear_import_state(context)
+    return ConversationHandler.END
 
 
 async def _process_csv(
@@ -193,47 +268,7 @@ async def _process_csv(
             ) as gf:
                 accounts = await gf.get_accounts()
 
-        buttons: list[list[InlineKeyboardButton]] = []
-        row: list[InlineKeyboardButton] = []
-
-        for acc in accounts:
-            acc_id = acc.get("id") or acc.get("accountId", "")
-            acc_name = acc.get("name", acc_id)
-            acc_currency = acc.get("currency", "")
-            label = f"{acc_name} ({acc_currency})" if acc_currency else acc_name
-            btn = InlineKeyboardButton(label, callback_data=f"{_ACCT_PREFIX}{acc_id}")
-            row.append(btn)
-            if len(row) == 2:
-                buttons.append(row)
-                row = []
-        if row:
-            buttons.append(row)
-
-        if settings.ghostfolio_account_id:
-            buttons.append([
-                InlineKeyboardButton(
-                    "Default account (from config)",
-                    callback_data=f"{_ACCT_PREFIX}default",
-                )
-            ])
-
-        buttons.append([InlineKeyboardButton(_CANCEL_TEXT, callback_data=_CANCEL_CB)])
-
-        if len(buttons) == 1:  # only the cancel button — no accounts found
-            await update.message.reply_text(
-                "No accounts found in Ghostfolio. "
-                "Please create an account first, then retry.",
-                reply_markup=ReplyKeyboardRemove(),
-            )
-            _clear_import_state(context)
-            return ConversationHandler.END
-
-        await update.message.reply_text(
-            f"Found *{len(activities)}* activities. Select the destination account:",
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup(buttons),
-        )
-        return SELECT_ACCOUNT
+        return await _show_account_selection(update, context, activities, accounts)
 
     except ValueError as e:
         await update.message.reply_text(f"Parse error: {e}", reply_markup=ReplyKeyboardRemove())
@@ -250,6 +285,56 @@ async def _process_csv(
 
     _clear_import_state(context)
     return ConversationHandler.END
+
+
+async def _show_account_selection(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    activities: list,
+    accounts: list,
+) -> int:
+    """Build and send the account selection keyboard. Returns SELECT_ACCOUNT state."""
+    buttons: list[list[InlineKeyboardButton]] = []
+    row: list[InlineKeyboardButton] = []
+
+    for acc in accounts:
+        acc_id = acc.get("id") or acc.get("accountId", "")
+        acc_name = acc.get("name", acc_id)
+        acc_currency = acc.get("currency", "")
+        label = f"{acc_name} ({acc_currency})" if acc_currency else acc_name
+        btn = InlineKeyboardButton(label, callback_data=f"{_ACCT_PREFIX}{acc_id}")
+        row.append(btn)
+        if len(row) == 2:
+            buttons.append(row)
+            row = []
+    if row:
+        buttons.append(row)
+
+    if settings.ghostfolio_account_id:
+        buttons.append([
+            InlineKeyboardButton(
+                "Default account (from config)",
+                callback_data=f"{_ACCT_PREFIX}default",
+            )
+        ])
+
+    buttons.append([InlineKeyboardButton(_CANCEL_TEXT, callback_data=_CANCEL_CB)])
+
+    if len(buttons) == 1:  # only the cancel button — no accounts found
+        await update.message.reply_text(
+            "No accounts found in Ghostfolio. "
+            "Please create an account first, then retry.",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+        _clear_import_state(context)
+        return ConversationHandler.END
+
+    await update.message.reply_text(
+        f"Found *{len(activities)}* activities. Select the destination account:",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(buttons),
+    )
+    return SELECT_ACCOUNT
 
 
 async def import_select_account_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -587,7 +672,10 @@ def _split_message(text: str, max_len: int = 4096) -> list[str]:
 
 
 def _clear_import_state(context: ContextTypes.DEFAULT_TYPE) -> None:
-    for key in ("import_broker", "csv_content", "pending_activities", "pending_import", "pending_parser_name"):
+    for key in (
+        "import_broker", "csv_content", "file_bytes", "is_xls",
+        "pending_activities", "pending_import", "pending_parser_name",
+    ):
         context.user_data.pop(key, None)
 
 
