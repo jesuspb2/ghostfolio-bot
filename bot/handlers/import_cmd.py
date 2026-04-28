@@ -685,6 +685,7 @@ def build_import_conversation() -> ConversationHandler:
         entry_points=[
             CommandHandler("import", import_start),
             MessageHandler(filters.Document.FileExtension("csv"), import_receive_file),
+            MessageHandler(filters.Document.FileExtension("xls"), import_receive_file),
         ],
         states={
             UPLOAD_FILE: [
