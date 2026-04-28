@@ -24,7 +24,9 @@ import difflib
 import io
 import logging
 import re
+from collections.abc import Callable
 from datetime import datetime
+from typing import Any, ClassVar
 
 from bot.parsers.base import BrokerParser, GhostfolioActivity, register_parser
 
@@ -175,10 +177,12 @@ def _parse_dt(date_str: str, time_str: str) -> datetime | None:
 class DegiroParser(BrokerParser):
     name = "DEGIRO"
     slug = "degiro"
-    HEADER_SIGNATURE = "Datum,Tijd,Valutadatum,Product,ISIN,Omschrijving,FX,Mutatie,,Saldo,,Order Id"
+    HEADER_SIGNATURE = (
+        "Datum,Tijd,Valutadatum,Product,ISIN,Omschrijving,FX,Mutatie,,Saldo,,Order Id"
+    )
     DELIMITER = ","
 
-    _ALL_SIGNATURES = [
+    _ALL_SIGNATURES: ClassVar[list[str]] = [
         "Datum,Tijd,Valutadatum,Product,ISIN,Omschrijving,FX,Mutatie,,Saldo,,Order Id",  # NL
         "Date,Time,Value date,Product,ISIN,Description,Type,Variation,,Balance,,Order ID",  # EN
         "Fecha,Hora,Fecha valor,Producto,ISIN,Descripción,Tipo,Variación,,Saldo,,ID Orden",  # ES
@@ -197,7 +201,7 @@ class DegiroParser(BrokerParser):
         records = self._read_records(content)
         return self._process(records)
 
-    def _read_records(self, content: str) -> list[dict]:
+    def _read_records(self, content: str) -> list[dict[str, Any]]:
         """Use csv.reader for positional access (the two unnamed columns break DictReader)."""
         reader = csv.reader(io.StringIO(content))
         rows = list(reader)
@@ -219,7 +223,7 @@ class DegiroParser(BrokerParser):
             })
         return result
 
-    def _process(self, records: list[dict]) -> list[GhostfolioActivity]:
+    def _process(self, records: list[dict[str, Any]]) -> list[GhostfolioActivity]:
         activities: list[GhostfolioActivity] = []
         consumed: set[int] = set()
 
@@ -255,7 +259,7 @@ class DegiroParser(BrokerParser):
                     continue
                 result = _find_ahead(
                     records, idx + 1, consumed,
-                    lambda r, isin=rec["isin"], date=rec["date"]: (
+                    lambda r, isin=rec["isin"], date=rec["date"]: (  # type: ignore[misc]
                         r["isin"] == isin
                         and r["date"] == date
                         and _is_dividend(r["description"])
@@ -279,7 +283,9 @@ class DegiroParser(BrokerParser):
                 if order_id:
                     result = _find_ahead(
                         records, idx + 1, consumed,
-                        lambda r, oid=order_id: r["order_id"] == oid and _is_buy_sell(r["description"]),
+                        lambda r, oid=order_id: (  # type: ignore[misc]
+                            r["order_id"] == oid and _is_buy_sell(r["description"])
+                        ),
                     )
                     if result:
                         buy_idx, buy_rec = result
@@ -298,7 +304,9 @@ class DegiroParser(BrokerParser):
                 if order_id:
                     result = _find_ahead(
                         records, idx + 1, consumed,
-                        lambda r, oid=order_id: r["order_id"] == oid and _is_fee_like(r["description"]),
+                        lambda r, oid=order_id: (  # type: ignore[misc]
+                            r["order_id"] == oid and _is_fee_like(r["description"])
+                        ),
                     )
                     if result:
                         fee_idx, fee_rec = result
@@ -313,7 +321,7 @@ class DegiroParser(BrokerParser):
             if _is_dividend(desc):
                 result = _find_ahead(
                     records, idx + 1, consumed,
-                    lambda r, isin=rec["isin"], date=rec["date"]: (
+                    lambda r, isin=rec["isin"], date=rec["date"]: (  # type: ignore[misc]
                         r["isin"] == isin
                         and r["date"] == date
                         and _is_fee_like(r["description"])
@@ -335,7 +343,9 @@ class DegiroParser(BrokerParser):
         logger.info("Parsed %d activities from DEGIRO (%d rows)", len(activities), len(records))
         return activities
 
-    def _make_buy_sell(self, rec: dict, fee_rec: dict | None) -> GhostfolioActivity | None:
+    def _make_buy_sell(
+        self, rec: dict[str, Any], fee_rec: dict[str, Any] | None
+    ) -> GhostfolioActivity | None:
         desc = rec["description"]
         amount = _parse_amount(rec["amount"])
 
@@ -359,7 +369,9 @@ class DegiroParser(BrokerParser):
             return None
 
         order_id = rec.get("order_id", "")
-        comment = order_id or f"{order_type.capitalize()} {rec['isin']} @ {rec['date']}T{rec['time']}"
+        comment = (
+            order_id or f"{order_type.capitalize()} {rec['isin']} @ {rec['date']}T{rec['time']}"
+        )
 
         currency = _normalise_currency(rec["currency"])
         if not currency:
@@ -378,7 +390,9 @@ class DegiroParser(BrokerParser):
             comment=comment,
         )
 
-    def _make_dividend(self, rec: dict, tax_rec: dict | None) -> GhostfolioActivity | None:
+    def _make_dividend(
+        self, rec: dict[str, Any], tax_rec: dict[str, Any] | None
+    ) -> GhostfolioActivity | None:
         dt = _parse_dt(rec["date"], rec["time"])
         if not dt:
             return None
@@ -403,7 +417,7 @@ class DegiroParser(BrokerParser):
             comment=f"Dividend {rec['isin']} @ {rec['date']}T{rec['time']}",
         )
 
-    def _make_platform_fee(self, rec: dict) -> GhostfolioActivity | None:
+    def _make_platform_fee(self, rec: dict[str, Any]) -> GhostfolioActivity | None:
         dt = _parse_dt(rec["date"], rec["time"])
         if not dt:
             return None
@@ -423,7 +437,7 @@ class DegiroParser(BrokerParser):
             comment=rec["description"],
         )
 
-    def _make_interest(self, rec: dict) -> GhostfolioActivity | None:
+    def _make_interest(self, rec: dict[str, Any]) -> GhostfolioActivity | None:
         dt = _parse_dt(rec["date"], rec["time"])
         if not dt:
             return None
@@ -445,11 +459,11 @@ class DegiroParser(BrokerParser):
 
 
 def _find_ahead(
-    records: list[dict],
+    records: list[dict[str, Any]],
     start: int,
     consumed: set[int],
-    predicate,
-) -> tuple[int, dict] | None:
+    predicate: Callable[[dict[str, Any]], bool],
+) -> tuple[int, dict[str, Any]] | None:
     for i in range(start, len(records)):
         if i not in consumed and predicate(records[i]):
             return i, records[i]

@@ -3,14 +3,14 @@ name = "ghostfolio-companion-bot"
 version = "0.1.0"
 description = "Manage your Ghostfolio instance from Telegram — import broker CSVs, track your portfolio, and automate backups."
 readme = "README.md"
-license = { text = "MIT" }
+license = { text = "AGPL-3.0-only" }
 requires-python = ">=3.12"
 authors = [{ name = "ghostfolio-bot contributors" }]
 keywords = ["ghostfolio", "telegram", "portfolio", "investing", "self-hosted"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: End Users/Desktop",
-    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: GNU Affero General Public License v3",
     "Programming Language :: Python :: 3.12",
     "Topic :: Office/Business :: Financial :: Investment",
 ]
@@ -52,6 +52,9 @@ line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "UP", "B", "SIM", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["E501"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

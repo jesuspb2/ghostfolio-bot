@@ -30,7 +30,6 @@ def test_can_handle_rejects_unknown() -> None:
 def test_skips_cash_movements() -> None:
     parser = RevolutInvestParser()
     activities = parser.parse(SAMPLE_CSV)
-    types = {a.type for a in activities}
     # No activity should come from CASH TOP-UP or CASH WITHDRAWAL
     assert all(a.symbol != "" for a in activities)
     tickers = [a.symbol for a in activities]

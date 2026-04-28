@@ -6,7 +6,8 @@ Flow: /add → type (BUY/SELL/DIVIDEND) → symbol → quantity → price → fe
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+from typing import Any
 
 from telegram import ReplyKeyboardMarkup, ReplyKeyboardRemove, Update
 from telegram.ext import (
@@ -41,8 +42,9 @@ async def add_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 async def add_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Store type, ask for symbol."""
-    if not update.message:
+    if not update.message or not update.message.text:
         return ConversationHandler.END
+    assert context.user_data is not None
 
     text = update.message.text.upper().strip()
     if text not in ("BUY", "SELL", "DIVIDEND"):
@@ -59,8 +61,9 @@ async def add_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 async def add_symbol(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Store symbol, ask for data source."""
-    if not update.message:
+    if not update.message or not update.message.text:
         return ConversationHandler.END
+    assert context.user_data is not None
 
     context.user_data["symbol"] = update.message.text.upper().strip()
     keyboard = [["YAHOO", "COINGECKO"], ["MANUAL", "OTHER"]]
@@ -73,8 +76,9 @@ async def add_symbol(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 async def add_data_source(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Store data source, ask for quantity."""
-    if not update.message:
+    if not update.message or not update.message.text:
         return ConversationHandler.END
+    assert context.user_data is not None
 
     context.user_data["data_source"] = update.message.text.upper().strip()
     await update.message.reply_text("Quantity? (e.g. 10, 0.5)", reply_markup=ReplyKeyboardRemove())
@@ -83,8 +87,10 @@ async def add_data_source(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 async def add_quantity(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Store quantity, ask for unit price."""
-    if not update.message:
+    if not update.message or not update.message.text:
         return ConversationHandler.END
+    assert context.user_data is not None
+
     try:
         context.user_data["quantity"] = float(update.message.text.replace(",", "."))
     except ValueError:
@@ -97,8 +103,10 @@ async def add_quantity(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 
 async def add_price(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Store price, ask for fee."""
-    if not update.message:
+    if not update.message or not update.message.text:
         return ConversationHandler.END
+    assert context.user_data is not None
+
     try:
         context.user_data["unit_price"] = float(update.message.text.replace(",", "."))
     except ValueError:
@@ -111,8 +119,10 @@ async def add_price(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 async def add_fee(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Store fee, ask for currency."""
-    if not update.message:
+    if not update.message or not update.message.text:
         return ConversationHandler.END
+    assert context.user_data is not None
+
     try:
         context.user_data["fee"] = float(update.message.text.replace(",", "."))
     except ValueError:
@@ -129,11 +139,12 @@ async def add_fee(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 async def add_currency(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Store currency, ask for date."""
-    if not update.message:
+    if not update.message or not update.message.text:
         return ConversationHandler.END
+    assert context.user_data is not None
 
     context.user_data["currency"] = update.message.text.upper().strip()
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    today = datetime.now(UTC).strftime("%Y-%m-%d")
     await update.message.reply_text(
         f"Date? (YYYY-MM-DD format, or 'today' for {today})",
         reply_markup=ReplyKeyboardRemove(),
@@ -143,12 +154,13 @@ async def add_currency(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 
 async def add_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Store date, show confirmation."""
-    if not update.message:
+    if not update.message or not update.message.text:
         return ConversationHandler.END
+    assert context.user_data is not None
 
     text = update.message.text.strip().lower()
     if text == "today":
-        date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        date_str = datetime.now(UTC).strftime("%Y-%m-%d")
     else:
         try:
             datetime.strptime(text, "%Y-%m-%d")
@@ -158,7 +170,7 @@ async def add_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             return DATE
 
     context.user_data["date"] = date_str
-    d = context.user_data
+    d: dict[str, Any] = context.user_data
 
     msg = format_activity_confirm(
         symbol=d["symbol"],
@@ -178,8 +190,9 @@ async def add_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     """Import the activity into Ghostfolio."""
     if not update.message:
         return ConversationHandler.END
+    assert context.user_data is not None
 
-    d = context.user_data
+    d: dict[str, Any] = context.user_data
     try:
         async with GhostfolioClient(
             settings.ghostfolio_url, settings.ghostfolio_access_token
@@ -191,7 +204,7 @@ async def add_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
                 unit_price=d["unit_price"],
                 fee=d["fee"],
                 currency=d["currency"],
-                date=datetime.strptime(d["date"], "%Y-%m-%d").replace(tzinfo=timezone.utc),
+                date=datetime.strptime(d["date"], "%Y-%m-%d").replace(tzinfo=UTC),
                 account_id=settings.ghostfolio_account_id,
                 data_source=d["data_source"],
             )
@@ -213,13 +226,15 @@ async def add_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 async def add_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Cancel the /add flow."""
     if update.message:
-        await update.message.reply_text("Transaction cancelled.", reply_markup=ReplyKeyboardRemove())
+        await update.message.reply_text(
+            "Transaction cancelled.", reply_markup=ReplyKeyboardRemove()
+        )
     if context.user_data:
         context.user_data.clear()
     return ConversationHandler.END
 
 
-def build_add_conversation() -> ConversationHandler:
+def build_add_conversation() -> ConversationHandler:  # type: ignore[type-arg]
     """Build and return the ConversationHandler for /add."""
     return ConversationHandler(
         entry_points=[CommandHandler("add", add_start)],

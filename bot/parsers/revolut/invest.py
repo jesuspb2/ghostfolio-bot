@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from bot.parsers.base import BrokerParser, GhostfolioActivity, register_parser
 
@@ -126,7 +126,9 @@ class RevolutInvestParser(BrokerParser):
             symbol = ticker
             data_source = "YAHOO"
             quantity = quantity_val
-            unit_price = price_val if price_val else (abs(total_val) / quantity if quantity else 0.0)
+            unit_price = price_val if price_val else (
+                abs(total_val) / quantity if quantity else 0.0
+            )
             if quantity == 0:
                 return None
         else:
@@ -154,7 +156,7 @@ class RevolutInvestParser(BrokerParser):
         # ISO 8601: "2023-09-22T13:30:10.514Z"
         try:
             dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
-            return dt.astimezone(timezone.utc).replace(tzinfo=None)
+            return dt.astimezone(UTC).replace(tzinfo=None)
         except ValueError:
             pass
         for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):

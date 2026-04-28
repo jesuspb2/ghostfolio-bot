@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
@@ -124,7 +124,7 @@ class GhostfolioClient:
     async def portfolio_details(self) -> dict[str, Any]:
         """GET /api/v1/portfolio/details — full portfolio overview."""
         logger.info("Fetching portfolio details")
-        return await self._request("GET", "/portfolio/details")
+        return cast(dict[str, Any], await self._request("GET", "/portfolio/details"))
 
     async def portfolio_performance(self, range_: str = "max") -> dict[str, Any]:
         """GET /api/v1/portfolio/performance — returns performance for a time range.
@@ -133,12 +133,12 @@ class GhostfolioClient:
         """
         logger.info("Fetching portfolio performance (range=%s)", range_)
         url = f"{self._base_url}/api/v2/portfolio/performance?range={range_}"
-        return await self._request("GET", url)
+        return cast(dict[str, Any], await self._request("GET", url))
 
     async def portfolio_holdings(self) -> dict[str, Any]:
         """GET /api/v1/portfolio/holdings — current positions."""
         logger.info("Fetching portfolio holdings")
-        return await self._request("GET", "/portfolio/holdings")
+        return cast(dict[str, Any], await self._request("GET", "/portfolio/holdings"))
 
     # -- Orders / Activities ---------------------------------------------------
 
@@ -146,7 +146,7 @@ class GhostfolioClient:
         """GET /api/v1/order — list all activities, optionally filtered by account."""
         logger.info("Fetching orders (account_id=%s)", account_id or "all")
         params = {"accounts": account_id} if account_id else None
-        return await self._request("GET", "/order", params=params)
+        return cast(dict[str, Any], await self._request("GET", "/order", params=params))
 
     async def validate_activities(
         self, activities: list[dict[str, Any]], chunk_size: int = 25
@@ -160,7 +160,7 @@ class GhostfolioClient:
         logger.info("Dry-run validating %d activities", len(activities))
         chunks = [activities[i : i + chunk_size] for i in range(0, len(activities), chunk_size)]
 
-        async def _validate_chunk(chunk: list[dict]) -> str | None:
+        async def _validate_chunk(chunk: list[dict[str, Any]]) -> str | None:
             try:
                 await self._request(
                     "POST", "/import", params={"dryRun": "true"}, json={"activities": chunk}
@@ -197,7 +197,7 @@ class GhostfolioClient:
         total_created = 0
         skipped: list[str] = []
 
-        async def _import_single(activity: dict) -> tuple[int, str | None]:
+        async def _import_single(activity: dict[str, Any]) -> tuple[int, str | None]:
             try:
                 resp = await self._request("POST", "/import", json={"activities": [activity]})
                 if isinstance(resp, dict) and "activities" in resp:
@@ -227,7 +227,8 @@ class GhostfolioClient:
                     total_created += len(chunk)
             except GhostfolioError as e:
                 _is_retryable = e.status_code == 500 or (
-                    e.status_code == 400 and "is not valid for the specified data source" in e.detail
+                    e.status_code == 400
+                    and "is not valid for the specified data source" in e.detail
                 )
                 if _is_retryable:
                     # Retry concurrently so valid activities still get imported
@@ -280,15 +281,30 @@ class GhostfolioClient:
     async def get_accounts(self) -> list[dict[str, Any]]:
         """GET /api/v1/account — list all accounts."""
         logger.info("Fetching accounts")
-        data = await self._request("GET", "/account")
-        return data.get("accounts", data) if isinstance(data, dict) else data
+        data = cast(dict[str, Any], await self._request("GET", "/account"))
+        result = data.get("accounts", data) if isinstance(data, dict) else data
+        return cast(list[dict[str, Any]], result)
+
+    async def create_account(
+        self, *, name: str, currency: str, balance: float = 0.0
+    ) -> dict[str, Any]:
+        """POST /api/v1/account — create a new account."""
+        logger.info("Creating account: %s (%s)", name, currency)
+        payload = {
+            "balance": balance,
+            "currency": currency,
+            "isExcluded": False,
+            "name": name,
+            "platformId": None,
+        }
+        return cast(dict[str, Any], await self._request("POST", "/account", json=payload))
 
     # -- Export / Backup -------------------------------------------------------
 
     async def export_data(self) -> dict[str, Any]:
         """GET /api/v1/export — full JSON export of all activities."""
         logger.info("Exporting full Ghostfolio data")
-        return await self._request("GET", "/export")
+        return cast(dict[str, Any], await self._request("GET", "/export"))
 
 
 # -- Deduplication -------------------------------------------------------------

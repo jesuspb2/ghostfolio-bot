@@ -21,9 +21,9 @@ from __future__ import annotations
 
 import io
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
-import pandas as pd
+import pandas as pd  # type: ignore[import-untyped]
 
 from bot.parsers.base import BrokerParser, GhostfolioActivity, register_parser
 
@@ -106,7 +106,7 @@ class MyInvestorParser(BrokerParser):
                     continue
 
                 try:
-                    date = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+                    date = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=UTC)
                 except ValueError:
                     logger.warning("MyInvestor: skipping row with bad date '%s'", date_str)
                     continue

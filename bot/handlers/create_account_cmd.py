@@ -6,6 +6,7 @@ Flow: /create_account → name → currency → balance → confirm
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from telegram import ReplyKeyboardMarkup, ReplyKeyboardRemove, Update
 from telegram.ext import (
@@ -36,8 +37,9 @@ async def create_account_start(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 async def create_account_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    if not update.message:
+    if not update.message or not update.message.text:
         return ConversationHandler.END
+    assert context.user_data is not None
 
     name = update.message.text.strip()
     if not name:
@@ -54,8 +56,9 @@ async def create_account_name(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 async def create_account_currency(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    if not update.message:
+    if not update.message or not update.message.text:
         return ConversationHandler.END
+    assert context.user_data is not None
 
     context.user_data["account_currency"] = update.message.text.upper().strip()
     await update.message.reply_text(
@@ -66,8 +69,9 @@ async def create_account_currency(update: Update, context: ContextTypes.DEFAULT_
 
 
 async def create_account_balance(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    if not update.message:
+    if not update.message or not update.message.text:
         return ConversationHandler.END
+    assert context.user_data is not None
 
     try:
         balance = float(update.message.text.replace(",", "."))
@@ -76,7 +80,7 @@ async def create_account_balance(update: Update, context: ContextTypes.DEFAULT_T
         return BALANCE
 
     context.user_data["account_balance"] = balance
-    d = context.user_data
+    d: dict[str, Any] = context.user_data
     await update.message.reply_text(
         f"*Create account?*\n\n"
         f"Name: {d['account_name']}\n"
@@ -91,8 +95,9 @@ async def create_account_balance(update: Update, context: ContextTypes.DEFAULT_T
 async def create_account_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if not update.message:
         return ConversationHandler.END
+    assert context.user_data is not None
 
-    d = context.user_data
+    d: dict[str, Any] = context.user_data
     try:
         async with GhostfolioClient(
             settings.ghostfolio_url, settings.ghostfolio_access_token
@@ -127,12 +132,14 @@ async def create_account_cancel(update: Update, context: ContextTypes.DEFAULT_TY
     return ConversationHandler.END
 
 
-def build_create_account_conversation() -> ConversationHandler:
+def build_create_account_conversation() -> ConversationHandler:  # type: ignore[type-arg]
     return ConversationHandler(
         entry_points=[CommandHandler("create_account", create_account_start)],
         states={
             NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, create_account_name)],
-            CURRENCY: [MessageHandler(filters.TEXT & ~filters.COMMAND, create_account_currency)],
+            CURRENCY: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, create_account_currency)
+            ],
             BALANCE: [MessageHandler(filters.TEXT & ~filters.COMMAND, create_account_balance)],
             CONFIRM: [
                 CommandHandler("confirm", create_account_confirm),

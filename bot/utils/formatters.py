@@ -35,7 +35,8 @@ def format_portfolio_summary(details: dict[str, Any]) -> str:
         "",
         f"Total value: `{format_currency(total_value, currency)}`",
         f"Invested: `{format_currency(total_investment, currency)}`",
-        f"P&L: `{format_currency(net_performance, currency)}` ({format_percentage(net_performance_pct)})",
+        f"P&L: `{format_currency(net_performance, currency)}`"
+        f" ({format_percentage(net_performance_pct)})",
         "",
     ]
 

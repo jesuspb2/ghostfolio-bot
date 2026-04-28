@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from bot.parsers.base import BrokerParser, GhostfolioActivity, register_parser
 
@@ -34,7 +34,11 @@ _FIAT_CURRENCIES = {
 class DeltaParser(BrokerParser):
     name = "Delta"
     slug = "delta"
-    HEADER_SIGNATURE = "Date,Way,Base amount,Base currency (name),Base type,Quote amount,Quote currency,Exchange,Sent/Received from,Sent to,Fee amount,Fee currency (name),Broker,Notes"
+    HEADER_SIGNATURE = (
+        "Date,Way,Base amount,Base currency (name),Base type,Quote amount,"
+        "Quote currency,Exchange,Sent/Received from,Sent to,Fee amount,"
+        "Fee currency (name),Broker,Notes"
+    )
     DELIMITER = ","
 
     def parse(self, csv_content: str) -> list[GhostfolioActivity]:
@@ -74,16 +78,13 @@ class DeltaParser(BrokerParser):
         if currency == "GBX":
             currency = "GBp"
 
-        if base_type == "CRYPTO":
-            # Only import crypto when quoted in fiat (e.g. BTC/EUR → symbol "BTC-EUR")
-            # Cross-crypto pairs (ETH/BTC) have no clean Yahoo Finance fiat price → skip
-            if currency not in _FIAT_CURRENCIES:
-                logger.debug(
-                    "Skipping cross-crypto record %s/%s",
-                    row.get("Base currency (name)"),
-                    currency,
-                )
-                return None
+        if base_type == "CRYPTO" and currency not in _FIAT_CURRENCIES:
+            logger.debug(
+                "Skipping cross-crypto record %s/%s",
+                row.get("Base currency (name)"),
+                currency,
+            )
+            return None
 
         # Symbol: strip " (Full Name)" suffix that Delta appends
         raw_symbol = row.get("Base currency (name)", "").strip()
@@ -135,7 +136,7 @@ class DeltaParser(BrokerParser):
         try:
             dt = datetime.fromisoformat(date_str)
             if dt.tzinfo is not None:
-                dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+                dt = dt.astimezone(UTC).replace(tzinfo=None)
             return dt
         except ValueError:
             pass

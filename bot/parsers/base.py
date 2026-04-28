@@ -60,7 +60,7 @@ class BrokerParser(ABC):
 
     @classmethod
     def detect(cls, header_line: str) -> float:
-        """Return similarity score 0.0–1.0 against HEADER_SIGNATURE."""
+        """Return similarity score 0.0-1.0 against HEADER_SIGNATURE."""
         if not cls.HEADER_SIGNATURE:
             return 0.0
         return difflib.SequenceMatcher(
@@ -69,7 +69,7 @@ class BrokerParser(ABC):
 
     @classmethod
     def detect_binary(cls, file_bytes: bytes) -> float:
-        """Return similarity score 0.0–1.0 for binary (e.g. XLS) file detection."""
+        """Return similarity score 0.0-1.0 for binary (e.g. XLS) file detection."""
         return 0.0
 
     def can_handle(self, csv_content: str) -> bool:

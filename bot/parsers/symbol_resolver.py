@@ -86,7 +86,10 @@ def _yahoo_search(isin: str, currency: str | None) -> str | None:
     # (e.g. "US91680M1071.SG" — ISIN + exchange suffix, meaning no real ticker found).
     real_candidates = [q for q in candidates if not q.get("symbol", "").startswith(isin)]
     if not real_candidates:
-        logger.debug("Yahoo Finance only returned ISIN-suffixed symbols for %s — treating as unresolved", isin)
+        logger.debug(
+            "Yahoo Finance only returned ISIN-suffixed symbols for %s — treating as unresolved",
+            isin,
+        )
         return None
     candidates = real_candidates
 
@@ -95,9 +98,9 @@ def _yahoo_search(isin: str, currency: str | None) -> str | None:
         norm = "GBp" if currency.upper() == "GBX" else currency
         for q in candidates:
             if q.get("currency", "").upper() == norm.upper():
-                return q["symbol"]
+                return str(q["symbol"])
 
-    return candidates[0]["symbol"]
+    return str(candidates[0]["symbol"])
 
 
 # -- Public async API ----------------------------------------------------------
@@ -165,7 +168,7 @@ async def resolve_symbols(
     resolved_map: dict[str, str | None] = {}
     tasks = {isin: resolve_isin(isin, currency) for isin, currency in to_resolve.items()}
     results = await asyncio.gather(*tasks.values(), return_exceptions=True)
-    for isin, result in zip(tasks.keys(), results):
+    for isin, result in zip(tasks.keys(), results, strict=False):
         if isinstance(result, Exception):
             logger.warning("Exception resolving %s: %s", isin, result)
             resolved_map[isin] = None

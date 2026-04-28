@@ -18,9 +18,19 @@ import io
 import json
 import logging
 import re
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import Any
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Message, ReplyKeyboardMarkup, ReplyKeyboardRemove, Update
+from telegram import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+    ReplyKeyboardMarkup,
+    ReplyKeyboardRemove,
+    Update,
+)
 from telegram.constants import ChatAction
 from telegram.ext import (
     CallbackQueryHandler,
@@ -49,9 +59,9 @@ UPLOAD_FILE, SELECT_BROKER, SELECT_ACCOUNT, IMPORT_CONFIRM = range(4)
 
 
 @asynccontextmanager
-async def _typing(chat):
+async def _typing(chat: Any) -> AsyncIterator[None]:
     """Keep sending TYPING action every 4 s until the context exits."""
-    async def _loop():
+    async def _loop() -> None:
         try:
             while True:
                 await chat.send_action(ChatAction.TYPING)
@@ -97,6 +107,7 @@ async def import_receive_file(update: Update, context: ContextTypes.DEFAULT_TYPE
             )
         return UPLOAD_FILE
 
+    assert context.user_data is not None
     doc = update.message.document
     fname = (doc.file_name or "").lower()
     if not (fname.endswith(".csv") or fname.endswith(".xls")):
@@ -134,7 +145,9 @@ async def import_receive_file(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text(
             "Could not detect the broker format automatically.\n"
             f"Which broker is this {'XLS' if is_xls else 'CSV'} from? Send /cancel to abort.",
-            reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True),
+            reply_markup=ReplyKeyboardMarkup(
+                keyboard, one_time_keyboard=True, resize_keyboard=True
+            ),
         )
         return SELECT_BROKER
 
@@ -150,8 +163,9 @@ async def import_select_broker(update: Update, context: ContextTypes.DEFAULT_TYP
     """Fallback: user manually picked a broker after auto-detect failed."""
     if not update.message:
         return ConversationHandler.END
+    assert context.user_data is not None
 
-    text = update.message.text.strip()
+    text = (update.message.text or "").strip()
     parsers = get_all_parsers()
     matched = None
     for slug, cls in parsers.items():
@@ -163,7 +177,9 @@ async def import_select_broker(update: Update, context: ContextTypes.DEFAULT_TYP
         keyboard = _broker_keyboard()
         await update.message.reply_text(
             "Unknown broker. Please choose one from the list:",
-            reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True),
+            reply_markup=ReplyKeyboardMarkup(
+                keyboard, one_time_keyboard=True, resize_keyboard=True
+            ),
         )
         return SELECT_BROKER
 
@@ -199,7 +215,10 @@ async def _process_file(
     file_bytes: bytes,
     broker_slug: str,
 ) -> int:
-    """Parse a binary file (e.g. XLS) with the given broker slug and proceed to account selection."""
+    """Parse a binary file (e.g. XLS) with the given broker slug and proceed to import."""
+    assert update.message is not None
+    assert context.user_data is not None
+
     try:
         async with _typing(update.message.chat):
             parser = get_parser(broker_slug)
@@ -247,6 +266,9 @@ async def _process_csv(
     broker_slug: str,
 ) -> int:
     """Parse CSV with the given broker slug and proceed to account selection."""
+    assert update.message is not None
+    assert context.user_data is not None
+
     try:
         async with _typing(update.message.chat):
             parser = get_parser(broker_slug)
@@ -290,10 +312,12 @@ async def _process_csv(
 async def _show_account_selection(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
-    activities: list,
-    accounts: list,
+    activities: list[Any],
+    accounts: list[Any],
 ) -> int:
     """Build and send the account selection keyboard. Returns SELECT_ACCOUNT state."""
+    assert update.message is not None
+
     buttons: list[list[InlineKeyboardButton]] = []
     row: list[InlineKeyboardButton] = []
 
@@ -339,7 +363,10 @@ async def _show_account_selection(
 
 async def import_select_account_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handle account selection, then show dedup preview."""
-    query = update.callback_query
+    assert update.callback_query is not None
+    assert context.user_data is not None
+
+    query: CallbackQuery = update.callback_query
     await query.answer()
 
     if query.data == _CANCEL_CB:
@@ -347,7 +374,7 @@ async def import_select_account_cb(update: Update, context: ContextTypes.DEFAULT
         await query.edit_message_text("Import cancelled.")
         return ConversationHandler.END
 
-    raw_account_id = query.data.removeprefix(_ACCT_PREFIX)
+    raw_account_id = (query.data or "").removeprefix(_ACCT_PREFIX)
     account_id = (
         settings.ghostfolio_account_id
         if raw_account_id == "default"
@@ -373,6 +400,7 @@ async def import_select_account_cb(update: Update, context: ContextTypes.DEFAULT
         # Resolve ISINs → Yahoo Finance tickers for all YAHOO-sourced activities.
         # This is needed for DEGIRO, IBKR, and any future parser that emits raw ISINs.
         await query.edit_message_text("Resolving symbols via Yahoo Finance…")
+        assert query.message is not None
         async with _typing(query.message.chat):
             activity_dicts, unresolvable_isins = await resolve_symbols(activity_dicts)
 
@@ -390,14 +418,20 @@ async def import_select_account_cb(update: Update, context: ContextTypes.DEFAULT
 
             # Drop activities whose ISINs could not be resolved — Ghostfolio would reject them.
             unresolvable_set = set(unresolvable_isins)
-            isin_skipped_activities = [a for a in activity_dicts if a.get("symbol") in unresolvable_set]
-            activity_dicts = [a for a in activity_dicts if a.get("symbol") not in unresolvable_set]
+            isin_skipped_activities = [
+                a for a in activity_dicts if a.get("symbol") in unresolvable_set
+            ]
+            activity_dicts = [
+                a for a in activity_dicts if a.get("symbol") not in unresolvable_set
+            ]
 
             # Drop activities where the Yahoo Finance symbol implies a native currency
             # that doesn't match the recorded one. DEGIRO (and some other brokers) convert
             # LSE/foreign-exchange transactions to the account currency (EUR), but Ghostfolio
             # crashes trying to reconcile e.g. IAG.L (GBp data) with currency=EUR.
-            activity_dicts, currency_skipped_activities = _filter_currency_mismatches(activity_dicts)
+            activity_dicts, currency_skipped_activities = _filter_currency_mismatches(
+                activity_dicts
+            )
 
             # Safety net: drop any activity with an empty or obviously invalid currency.
             # Parsers should guard this themselves, but a stray empty value would cause
@@ -413,7 +447,9 @@ async def import_select_account_cb(update: Update, context: ContextTypes.DEFAULT
                     len(invalid_currency),
                     bad_currencies,
                 )
-                activity_dicts = [a for a in activity_dicts if valid_currency.match(a.get("currency", ""))]
+                activity_dicts = [
+                    a for a in activity_dicts if valid_currency.match(a.get("currency", ""))
+                ]
 
             to_import = deduplicate_activities(activity_dicts, existing_list)
             skipped = len(activity_dicts) - len(to_import)
@@ -425,7 +461,8 @@ async def import_select_account_cb(update: Update, context: ContextTypes.DEFAULT
 
             if not to_import:
                 await query.edit_message_text(
-                    f"All {len(activity_dicts)} activities already exist in Ghostfolio. Nothing to import."
+                    f"All {len(activity_dicts)} activities already exist in Ghostfolio."
+                    " Nothing to import."
                 )
                 _clear_import_state(context)
                 return ConversationHandler.END
@@ -455,14 +492,16 @@ async def import_select_account_cb(update: Update, context: ContextTypes.DEFAULT
             lines.append("✅ Validated by Ghostfolio")
         if isin_skipped_activities:
             lines.append(
-                f"⚠️ *{len(isin_skipped_activities)} activit{'y' if len(isin_skipped_activities) == 1 else 'ies'} "
+                f"⚠️ *{len(isin_skipped_activities)} activit"
+                f"{'y' if len(isin_skipped_activities) == 1 else 'ies'} "
                 "skipped* (ISIN not found on Yahoo Finance):"
             )
             for a in isin_skipped_activities:
                 lines.append(f"  `{a['date'][:10]}` {a['type']:9s} `{a.get('symbol', '?')}`")
         if currency_skipped_activities:
             lines.append(
-                f"⚠️ *{len(currency_skipped_activities)} activit{'y' if len(currency_skipped_activities) == 1 else 'ies'} "
+                f"⚠️ *{len(currency_skipped_activities)} activit"
+                f"{'y' if len(currency_skipped_activities) == 1 else 'ies'} "
                 "skipped* (currency mismatch — broker recorded in account currency, "
                 "but Yahoo Finance uses a different native currency):"
             )
@@ -473,7 +512,7 @@ async def import_select_account_cb(update: Update, context: ContextTypes.DEFAULT
             if a["type"] in ("DIVIDEND", "FEE", "INTEREST"):
                 amount = f"{a['unitPrice']:.4f} {a['currency']}"
             else:
-                amount = f"{a['quantity']} × {a['symbol']}"
+                amount = f"{a['quantity']} x {a['symbol']}"
             lines.append(f"`{a['date'][:10]}` {a['type']:9s} {amount}")
 
         context.user_data["pending_import"] = to_import
@@ -498,7 +537,9 @@ async def import_select_account_cb(update: Update, context: ContextTypes.DEFAULT
             if isinstance(query.message, Message):
                 for chunk in chunks[1:-1]:
                     await query.message.reply_text(chunk, parse_mode="Markdown")
-                await query.message.reply_text(chunks[-1], parse_mode="Markdown", reply_markup=keyboard)
+                await query.message.reply_text(
+                    chunks[-1], parse_mode="Markdown", reply_markup=keyboard
+                )
         return IMPORT_CONFIRM
 
     except GhostfolioError as e:
@@ -514,7 +555,10 @@ async def import_select_account_cb(update: Update, context: ContextTypes.DEFAULT
 
 async def import_confirm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handle confirm/cancel inline button press."""
-    query = update.callback_query
+    assert update.callback_query is not None
+    assert context.user_data is not None
+
+    query: CallbackQuery = update.callback_query
     await query.answer()
 
     if query.data == _CANCEL_CB:
@@ -538,7 +582,9 @@ async def import_confirm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     return ConversationHandler.END
 
 
-async def _send_import_json(query, to_import: list[dict], parser_name: str) -> None:
+async def _send_import_json(
+    query: CallbackQuery, to_import: list[dict[str, Any]], parser_name: str
+) -> None:
     """Export activities as a Ghostfolio-compatible JSON file and send to user."""
     try:
         payload = {"activities": to_import}
@@ -558,6 +604,7 @@ async def _send_import_json(query, to_import: list[dict], parser_name: str) -> N
         )
 
         await query.edit_message_text("Generating JSON file…")
+        assert isinstance(query.message, Message)
         await query.message.reply_document(
             document=buf,
             filename=buf.name,
@@ -569,7 +616,9 @@ async def _send_import_json(query, to_import: list[dict], parser_name: str) -> N
         await query.edit_message_text("Unexpected error generating JSON file.")
 
 
-async def _do_direct_import(query, to_import: list[dict], parser_name: str) -> None:
+async def _do_direct_import(
+    query: CallbackQuery, to_import: list[dict[str, Any]], parser_name: str
+) -> None:
     """POST activities directly to Ghostfolio."""
     try:
         async with GhostfolioClient(
@@ -588,7 +637,8 @@ async def _do_direct_import(query, to_import: list[dict], parser_name: str) -> N
         if skipped_symbols:
             unique = sorted(set(skipped_symbols))
             summary_lines.append(
-                f"\n⚠️ *{len(skipped_symbols)} activities skipped* — symbol not found on data source:\n"
+                f"\n⚠️ *{len(skipped_symbols)} activities skipped*"
+                " — symbol not found on data source:\n"
                 + ", ".join(f"`{s}`" for s in unique)
             )
         elif created < len(to_import):
@@ -634,11 +684,13 @@ _SUFFIX_NATIVE_CURRENCY: dict[str, set[str]] = {
 }
 
 
-def _filter_currency_mismatches(activities: list[dict]) -> tuple[list[dict], list[dict]]:
+def _filter_currency_mismatches(
+    activities: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Remove activities where the symbol's implied native currency doesn't match
     the recorded currency. Returns (filtered_list, skipped_activities)."""
-    ok: list[dict] = []
-    skipped: list[dict] = []
+    ok: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
     for a in activities:
         symbol = a.get("symbol", "")
         currency = a.get("currency", "")
@@ -672,6 +724,8 @@ def _split_message(text: str, max_len: int = 4096) -> list[str]:
 
 
 def _clear_import_state(context: ContextTypes.DEFAULT_TYPE) -> None:
+    if context.user_data is None:
+        return
     for key in (
         "import_broker", "csv_content", "file_bytes", "is_xls",
         "pending_activities", "pending_import", "pending_parser_name",
@@ -679,7 +733,7 @@ def _clear_import_state(context: ContextTypes.DEFAULT_TYPE) -> None:
         context.user_data.pop(key, None)
 
 
-def build_import_conversation() -> ConversationHandler:
+def build_import_conversation() -> ConversationHandler:  # type: ignore[type-arg]
     """Build and return the ConversationHandler for /import."""
     return ConversationHandler(
         entry_points=[
