@@ -4,9 +4,10 @@ WORKDIR /app
 
 RUN pip install uv
 
-COPY pyproject.toml .
-RUN uv sync --no-dev
+COPY pyproject.toml README.md ./
+RUN uv sync --no-dev --no-install-project
 
-COPY bot/ bot/
+COPY . .
+RUN uv sync --no-dev
 
 CMD ["uv", "run", "ghostfolio-bot"]

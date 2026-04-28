@@ -19,7 +19,7 @@ import json
 import logging
 import re
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from typing import Any
 
 from telegram import (
@@ -74,7 +74,8 @@ async def _typing(chat: Any) -> AsyncIterator[None]:
         yield
     finally:
         task.cancel()
-        await asyncio.shield(task)
+        with suppress(asyncio.CancelledError):
+            await task
 
 _ACCT_PREFIX = "acct:"
 _CONFIRM_CB = "import_confirm"

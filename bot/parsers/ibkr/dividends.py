@@ -28,6 +28,7 @@ Sample:    examples/Export-To-Ghostfolio/samples/ibkr-dividends-export.csv
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import re
 from datetime import datetime
@@ -101,10 +102,8 @@ class IbkrDividendsParser(BrokerParser):
             isin = row.get("ISIN", "").strip().strip('"')
             desc = row.get("Description", "").strip().strip('"')
             key = (isin, _description_prefix(desc, _TAX_TYPE))
-            try:
+            with contextlib.suppress(Exception):
                 tax_map[key] = abs(_parse_float(row.get("Amount", "0")))
-            except Exception:
-                pass
 
         # Second pass: produce DIVIDEND activities
         activities: list[GhostfolioActivity] = []

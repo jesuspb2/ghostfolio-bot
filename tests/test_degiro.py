@@ -1,7 +1,7 @@
 """Tests for the DEGIRO parser."""
 
+
 import pytest
-from datetime import datetime
 
 from bot.parsers.degiro import DegiroParser, _parse_amount
 

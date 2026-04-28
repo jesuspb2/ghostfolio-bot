@@ -93,8 +93,11 @@ uv run ghostfolio-bot
 Make sure you have a `.env` file configured (see [Configure](#2-configure)), then:
 
 ```bash
-# Build the image and start the bot in the background
+# Start the bot in the background
 docker compose up -d
+
+# Build the image and start (use this after code changes)
+docker compose up -d --build
 
 # View logs
 docker compose logs -f
@@ -139,10 +142,10 @@ uv sync --extra dev
 # Run tests
 uv run pytest
 
-# Lint
+# Lint (required — auto-fixable with --fix)
 uv run ruff check .
 
-# Type check
+# Type check (optional but appreciated)
 uv run mypy bot
 ```
 
@@ -175,9 +178,10 @@ See [`bot/parsers/revolut/savings.py`](bot/parsers/revolut/savings.py) for a min
 Contributions are welcome! Please open an issue before submitting a pull request for significant changes.
 
 1. Fork the repo and create a feature branch
-2. Follow the existing code style (`ruff`, `mypy strict`)
+2. Make sure `ruff check .` passes (required) — run `ruff check . --fix` to auto-fix most issues
 3. Add or update tests for your change
-4. Open a PR with a clear description
+4. Type annotations are appreciated but not required to get a PR merged
+5. Open a PR with a clear description
 
 ---
 

@@ -1,5 +1,7 @@
 """Tests for MyInvestor XLS parser."""
 
+from datetime import UTC
+
 import pytest
 
 from bot.parsers.myinvestor import MyInvestorParser
@@ -146,11 +148,10 @@ def test_date_parsed() -> None:
 
 
 def test_date_is_utc() -> None:
-    from datetime import timezone
     parser = MyInvestorParser()
     activities = parser.parse_binary(_XLS)
     for a in activities:
-        assert a.date.tzinfo == timezone.utc
+        assert a.date.tzinfo == UTC
 
 
 # ── Error cases ────────────────────────────────────────────────────────────────

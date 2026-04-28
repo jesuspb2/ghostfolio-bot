@@ -76,8 +76,8 @@ class MyInvestorParser(BrokerParser):
 
         if df is None:
             raise ValueError(
-                "No transaction table found in this XLS. "
-                "Please upload the fondos (transactions) export, not the portfolio summary."
+                "No transaction table found. "
+                "Please upload the fondos export (transactions), not salida.xls."
             )
 
         activities: list[GhostfolioActivity] = []
