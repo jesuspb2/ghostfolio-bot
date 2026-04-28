@@ -13,12 +13,14 @@ Cancel is available at every step:
 
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 import logging
 import re
+from contextlib import asynccontextmanager
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, ReplyKeyboardRemove, Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Message, ReplyKeyboardMarkup, ReplyKeyboardRemove, Update
 from telegram.constants import ChatAction
 from telegram.ext import (
     CallbackQueryHandler,
@@ -44,6 +46,25 @@ from bot.utils.auth import restricted
 logger = logging.getLogger(__name__)
 
 UPLOAD_FILE, SELECT_BROKER, SELECT_ACCOUNT, IMPORT_CONFIRM = range(4)
+
+
+@asynccontextmanager
+async def _typing(chat):
+    """Keep sending TYPING action every 4 s until the context exits."""
+    async def _loop():
+        try:
+            while True:
+                await chat.send_action(ChatAction.TYPING)
+                await asyncio.sleep(4)
+        except asyncio.CancelledError:
+            pass
+
+    task = asyncio.create_task(_loop())
+    try:
+        yield
+    finally:
+        task.cancel()
+        await asyncio.shield(task)
 
 _ACCT_PREFIX = "acct:"
 _CONFIRM_CB = "import_confirm"
@@ -83,18 +104,17 @@ async def import_receive_file(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
         return UPLOAD_FILE
 
-    await update.message.chat.send_action(ChatAction.TYPING)
     await update.message.reply_text(
         f"Processing `{doc.file_name}`…",
         parse_mode="Markdown",
         reply_markup=ReplyKeyboardRemove(),
     )
 
-    tg_file = await doc.get_file(read_timeout=30)
-    file_bytes = await tg_file.download_as_bytearray(read_timeout=30)
-    csv_content = file_bytes.decode("utf-8-sig")
-
-    parser = auto_detect_parser(csv_content)
+    async with _typing(update.message.chat):
+        tg_file = await doc.get_file(read_timeout=30)
+        file_bytes = await tg_file.download_as_bytearray(read_timeout=30)
+        csv_content = file_bytes.decode("utf-8-sig")
+        parser = auto_detect_parser(csv_content)
     if not parser:
         context.user_data["csv_content"] = csv_content
         keyboard = _broker_keyboard()
@@ -152,26 +172,26 @@ async def _process_csv(
     broker_slug: str,
 ) -> int:
     """Parse CSV with the given broker slug and proceed to account selection."""
-    await update.message.chat.send_action(ChatAction.TYPING)
     try:
-        parser = get_parser(broker_slug)
-        activities = parser.parse(csv_content)
+        async with _typing(update.message.chat):
+            parser = get_parser(broker_slug)
+            activities = parser.parse(csv_content)
 
-        if not activities:
-            await update.message.reply_text(
-                "No importable activities found in this CSV.",
-                reply_markup=ReplyKeyboardRemove(),
-            )
-            _clear_import_state(context)
-            return ConversationHandler.END
+            if not activities:
+                await update.message.reply_text(
+                    "No importable activities found in this CSV.",
+                    reply_markup=ReplyKeyboardRemove(),
+                )
+                _clear_import_state(context)
+                return ConversationHandler.END
 
-        context.user_data["pending_activities"] = activities
-        context.user_data["pending_parser_name"] = parser.name
+            context.user_data["pending_activities"] = activities
+            context.user_data["pending_parser_name"] = parser.name
 
-        async with GhostfolioClient(
-            settings.ghostfolio_url, settings.ghostfolio_access_token
-        ) as gf:
-            accounts = await gf.get_accounts()
+            async with GhostfolioClient(
+                settings.ghostfolio_url, settings.ghostfolio_access_token
+            ) as gf:
+                accounts = await gf.get_accounts()
 
         buttons: list[list[InlineKeyboardButton]] = []
         row: list[InlineKeyboardButton] = []
@@ -268,73 +288,72 @@ async def import_select_account_cb(update: Update, context: ContextTypes.DEFAULT
         # Resolve ISINs → Yahoo Finance tickers for all YAHOO-sourced activities.
         # This is needed for DEGIRO, IBKR, and any future parser that emits raw ISINs.
         await query.edit_message_text("Resolving symbols via Yahoo Finance…")
-        activity_dicts, unresolvable_isins = await resolve_symbols(activity_dicts)
+        async with _typing(query.message.chat):
+            activity_dicts, unresolvable_isins = await resolve_symbols(activity_dicts)
 
         async with GhostfolioClient(
             settings.ghostfolio_url, settings.ghostfolio_access_token
         ) as gf:
-            existing = await gf.get_orders()
+            existing = await gf.get_orders(account_id=account_id)
 
-        existing_list = (
-            existing.get("activities", []) if isinstance(existing, dict) else existing or []
-        )
-
-        symbol_map = build_manual_symbol_map(existing_list)
-        resolve_manual_symbols(activity_dicts, symbol_map)
-
-        # Drop activities whose ISINs could not be resolved — Ghostfolio would reject them.
-        unresolvable_set = set(unresolvable_isins)
-        isin_skipped_activities = [a for a in activity_dicts if a.get("symbol") in unresolvable_set]
-        activity_dicts = [a for a in activity_dicts if a.get("symbol") not in unresolvable_set]
-
-        # Drop activities where the Yahoo Finance symbol implies a native currency
-        # that doesn't match the recorded one. DEGIRO (and some other brokers) convert
-        # LSE/foreign-exchange transactions to the account currency (EUR), but Ghostfolio
-        # crashes trying to reconcile e.g. IAG.L (GBp data) with currency=EUR.
-        activity_dicts, currency_skipped_activities = _filter_currency_mismatches(activity_dicts)
-
-        # Safety net: drop any activity with an empty or obviously invalid currency.
-        # Parsers should guard this themselves, but a stray empty value would cause
-        # Ghostfolio to return 400 "must be a valid ISO4217 currency code".
-        valid_currency = re.compile(r"^[A-Za-z]{3}$")
-        invalid_currency = [
-            a for a in activity_dicts if not valid_currency.match(a.get("currency", ""))
-        ]
-        if invalid_currency:
-            bad_currencies = {a.get("currency", "") for a in invalid_currency}
-            logger.warning(
-                "Dropping %d activities with invalid currency: %s",
-                len(invalid_currency),
-                bad_currencies,
+            existing_list = (
+                existing.get("activities", []) if isinstance(existing, dict) else existing or []
             )
-            activity_dicts = [a for a in activity_dicts if valid_currency.match(a.get("currency", ""))]
 
-        to_import = deduplicate_activities(activity_dicts, existing_list)
-        skipped = len(activity_dicts) - len(to_import)
+            symbol_map = build_manual_symbol_map(existing_list)
+            resolve_manual_symbols(activity_dicts, symbol_map)
 
-        # Sort chronologically so Ghostfolio never sees a SELL before its BUYs.
-        # Out-of-order imports (e.g. newest-first CSVs) cause Ghostfolio to crash
-        # when computing portfolio performance on a negative position.
-        to_import.sort(key=lambda a: a.get("date", ""))
+            # Drop activities whose ISINs could not be resolved — Ghostfolio would reject them.
+            unresolvable_set = set(unresolvable_isins)
+            isin_skipped_activities = [a for a in activity_dicts if a.get("symbol") in unresolvable_set]
+            activity_dicts = [a for a in activity_dicts if a.get("symbol") not in unresolvable_set]
 
-        if not to_import:
-            await query.edit_message_text(
-                f"All {len(activity_dicts)} activities already exist in Ghostfolio. Nothing to import."
-            )
-            _clear_import_state(context)
-            return ConversationHandler.END
+            # Drop activities where the Yahoo Finance symbol implies a native currency
+            # that doesn't match the recorded one. DEGIRO (and some other brokers) convert
+            # LSE/foreign-exchange transactions to the account currency (EUR), but Ghostfolio
+            # crashes trying to reconcile e.g. IAG.L (GBp data) with currency=EUR.
+            activity_dicts, currency_skipped_activities = _filter_currency_mismatches(activity_dicts)
 
-        # Validate against Ghostfolio before showing the confirm button.
-        await query.edit_message_text("Validating activities against Ghostfolio…")
-        validation_errors: list[str] = []
-        try:
-            async with GhostfolioClient(
-                settings.ghostfolio_url, settings.ghostfolio_access_token
-            ) as gf:
-                validation_errors = await gf.validate_activities(to_import)
-        except Exception:
-            logger.exception("Unexpected error during dry-run validation")
-            validation_errors = ["Could not reach Ghostfolio for validation."]
+            # Safety net: drop any activity with an empty or obviously invalid currency.
+            # Parsers should guard this themselves, but a stray empty value would cause
+            # Ghostfolio to return 400 "must be a valid ISO4217 currency code".
+            valid_currency = re.compile(r"^[A-Za-z]{3}$")
+            invalid_currency = [
+                a for a in activity_dicts if not valid_currency.match(a.get("currency", ""))
+            ]
+            if invalid_currency:
+                bad_currencies = {a.get("currency", "") for a in invalid_currency}
+                logger.warning(
+                    "Dropping %d activities with invalid currency: %s",
+                    len(invalid_currency),
+                    bad_currencies,
+                )
+                activity_dicts = [a for a in activity_dicts if valid_currency.match(a.get("currency", ""))]
+
+            to_import = deduplicate_activities(activity_dicts, existing_list)
+            skipped = len(activity_dicts) - len(to_import)
+
+            # Sort chronologically so Ghostfolio never sees a SELL before its BUYs.
+            # Out-of-order imports (e.g. newest-first CSVs) cause Ghostfolio to crash
+            # when computing portfolio performance on a negative position.
+            to_import.sort(key=lambda a: a.get("date", ""))
+
+            if not to_import:
+                await query.edit_message_text(
+                    f"All {len(activity_dicts)} activities already exist in Ghostfolio. Nothing to import."
+                )
+                _clear_import_state(context)
+                return ConversationHandler.END
+
+            # Validate against Ghostfolio before showing the confirm button.
+            await query.edit_message_text("Validating activities against Ghostfolio…")
+            validation_errors: list[str] = []
+            try:
+                async with _typing(query.message.chat):
+                    validation_errors = await gf.validate_activities(to_import)
+            except Exception:
+                logger.exception("Unexpected error during dry-run validation")
+                validation_errors = ["Could not reach Ghostfolio for validation."]
 
         lines = [
             f"Found *{len(activity_dicts)}* activities in CSV",
@@ -345,10 +364,8 @@ async def import_select_account_cb(update: Update, context: ContextTypes.DEFAULT
         if validation_errors:
             lines.append("")
             lines.append("⚠️ *Ghostfolio validation errors:*")
-            for err in validation_errors[:5]:
+            for err in validation_errors:
                 lines.append(f"  • `{err}`")
-            if len(validation_errors) > 5:
-                lines.append(f"  _…and {len(validation_errors) - 5} more_")
         else:
             lines.append("✅ Validated by Ghostfolio")
         if isin_skipped_activities:
@@ -356,29 +373,23 @@ async def import_select_account_cb(update: Update, context: ContextTypes.DEFAULT
                 f"⚠️ *{len(isin_skipped_activities)} activit{'y' if len(isin_skipped_activities) == 1 else 'ies'} "
                 "skipped* (ISIN not found on Yahoo Finance):"
             )
-            for a in isin_skipped_activities[:5]:
+            for a in isin_skipped_activities:
                 lines.append(f"  `{a['date'][:10]}` {a['type']:9s} `{a.get('symbol', '?')}`")
-            if len(isin_skipped_activities) > 5:
-                lines.append(f"  _…and {len(isin_skipped_activities) - 5} more_")
         if currency_skipped_activities:
             lines.append(
                 f"⚠️ *{len(currency_skipped_activities)} activit{'y' if len(currency_skipped_activities) == 1 else 'ies'} "
                 "skipped* (currency mismatch — broker recorded in account currency, "
                 "but Yahoo Finance uses a different native currency):"
             )
-            for a in currency_skipped_activities[:5]:
+            for a in currency_skipped_activities:
                 lines.append(f"  `{a['date'][:10]}` {a['type']:9s} `{a.get('symbol', '?')}`")
-            if len(currency_skipped_activities) > 5:
-                lines.append(f"  _…and {len(currency_skipped_activities) - 5} more_")
         lines.append("")
-        for a in to_import[:20]:
+        for a in to_import:
             if a["type"] in ("DIVIDEND", "FEE", "INTEREST"):
                 amount = f"{a['unitPrice']:.4f} {a['currency']}"
             else:
                 amount = f"{a['quantity']} × {a['symbol']}"
             lines.append(f"`{a['date'][:10]}` {a['type']:9s} {amount}")
-        if len(to_import) > 20:
-            lines.append(f"_…and {len(to_import) - 20} more_")
 
         context.user_data["pending_import"] = to_import
         context.user_data["pending_parser_name"] = parser_name
@@ -388,15 +399,21 @@ async def import_select_account_cb(update: Update, context: ContextTypes.DEFAULT
         else:
             confirm_label = f"✅ Import {len(to_import)} to Ghostfolio"
 
-        keyboard = [[
+        keyboard = InlineKeyboardMarkup([[
             InlineKeyboardButton(confirm_label, callback_data=_CONFIRM_CB),
             InlineKeyboardButton(_CANCEL_TEXT, callback_data=_CANCEL_CB),
-        ]]
-        await query.edit_message_text(
-            "\n".join(lines),
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-        )
+        ]])
+        full_text = "\n".join(lines)
+        # Telegram max message length is 4096 chars; split if needed
+        if len(full_text) <= 4096:
+            await query.edit_message_text(full_text, parse_mode="Markdown", reply_markup=keyboard)
+        else:
+            chunks = _split_message(full_text, 4096)
+            await query.edit_message_text(chunks[0], parse_mode="Markdown")
+            if isinstance(query.message, Message):
+                for chunk in chunks[1:-1]:
+                    await query.message.reply_text(chunk, parse_mode="Markdown")
+                await query.message.reply_text(chunks[-1], parse_mode="Markdown", reply_markup=keyboard)
         return IMPORT_CONFIRM
 
     except GhostfolioError as e:
@@ -553,6 +570,20 @@ def _filter_currency_mismatches(activities: list[dict]) -> tuple[list[dict], lis
         if not mismatch:
             ok.append(a)
     return ok, skipped
+
+
+def _split_message(text: str, max_len: int = 4096) -> list[str]:
+    """Split a long message into chunks ≤ max_len, breaking on newlines."""
+    chunks: list[str] = []
+    while len(text) > max_len:
+        split_at = text.rfind("\n", 0, max_len)
+        if split_at == -1:
+            split_at = max_len
+        chunks.append(text[:split_at])
+        text = text[split_at:].lstrip("\n")
+    if text:
+        chunks.append(text)
+    return chunks
 
 
 def _clear_import_state(context: ContextTypes.DEFAULT_TYPE) -> None:

@@ -6,6 +6,7 @@ needed by the bot: import activities, get portfolio details, export data.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import UTC, datetime
 from typing import Any
@@ -158,15 +159,18 @@ class GhostfolioClient:
         """
         logger.info("Dry-run validating %d activities", len(activities))
         chunks = [activities[i : i + chunk_size] for i in range(0, len(activities), chunk_size)]
-        errors: list[str] = []
 
-        for chunk in chunks:
+        async def _validate_chunk(chunk: list[dict]) -> str | None:
             try:
                 await self._request(
                     "POST", "/import", params={"dryRun": "true"}, json={"activities": chunk}
                 )
+                return None
             except GhostfolioError as e:
-                errors.append(e.detail[:200])
+                return e.detail[:200]
+
+        results = await asyncio.gather(*[_validate_chunk(c) for c in chunks])
+        errors = [r for r in results if r is not None]
 
         if errors:
             logger.warning("Dry-run validation found %d error(s): %s", len(errors), errors)
@@ -193,6 +197,26 @@ class GhostfolioClient:
         total_created = 0
         skipped: list[str] = []
 
+        async def _import_single(activity: dict) -> tuple[int, str | None]:
+            try:
+                resp = await self._request("POST", "/import", json={"activities": [activity]})
+                if isinstance(resp, dict) and "activities" in resp:
+                    return len(resp["activities"]), None
+                return 1, None
+            except GhostfolioError as inner:
+                _inner_retryable = inner.status_code == 500 or (
+                    inner.status_code == 400
+                    and "is not valid for the specified data source" in inner.detail
+                )
+                if _inner_retryable:
+                    symbol = activity.get("symbol", "?")
+                    logger.warning(
+                        "Skipping activity (status=%d): %s — %s",
+                        inner.status_code, symbol, inner.detail[:120],
+                    )
+                    return 0, symbol
+                raise
+
         for chunk in chunks:
             try:
                 resp = await self._request("POST", "/import", json={"activities": chunk})
@@ -206,28 +230,12 @@ class GhostfolioClient:
                     e.status_code == 400 and "is not valid for the specified data source" in e.detail
                 )
                 if _is_retryable:
-                    # Retry one-by-one so valid activities still get imported
-                    for activity in chunk:
-                        try:
-                            resp = await self._request("POST", "/import", json={"activities": [activity]})
-                            if isinstance(resp, dict) and "activities" in resp:
-                                total_created += len(resp["activities"])
-                            else:
-                                total_created += 1
-                        except GhostfolioError as inner:
-                            _inner_retryable = inner.status_code == 500 or (
-                                inner.status_code == 400
-                                and "is not valid for the specified data source" in inner.detail
-                            )
-                            if _inner_retryable:
-                                symbol = activity.get("symbol", "?")
-                                skipped.append(symbol)
-                                logger.warning(
-                                    "Skipping activity (status=%d): %s — %s",
-                                    inner.status_code, symbol, inner.detail[:120],
-                                )
-                            else:
-                                raise
+                    # Retry concurrently so valid activities still get imported
+                    retry_results = await asyncio.gather(*[_import_single(a) for a in chunk])
+                    for count, sym in retry_results:
+                        total_created += count
+                        if sym:
+                            skipped.append(sym)
                 else:
                     raise
 

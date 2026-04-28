@@ -132,7 +132,6 @@ async def resolve_isin(isin: str, currency: str | None = None) -> str | None:
     if ticker:
         _memory_cache[cache_key] = ticker
         _memory_cache[isin] = ticker  # generic fallback for future lookups
-        _persist_cache()
         logger.info("Resolved ISIN %s → %s (currency=%s)", isin, ticker, currency)
 
     return ticker
@@ -172,6 +171,9 @@ async def resolve_symbols(
             resolved_map[isin] = None
         else:
             resolved_map[isin] = result  # type: ignore[assignment]
+
+    # Persist cache once after all ISINs resolved (avoids N disk writes)
+    _persist_cache()
 
     # Apply resolved tickers back to activities
     unresolvable: list[str] = []
