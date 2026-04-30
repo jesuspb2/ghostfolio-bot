@@ -13,12 +13,14 @@ from bot.config import settings
 from bot.handlers.backup_cmd import backup_handler, build_restore_conversation
 from bot.handlers.create_account_cmd import build_create_account_conversation
 from bot.handlers.import_cmd import build_import_conversation
+from bot.handlers.performance_cmd import performance_handler
 from bot.handlers.portfolio_cmd import portfolio_handler
 from bot.handlers.start_cmd import help_handler, start_handler
 
 _COMMANDS = [
     BotCommand("start", "Welcome message and command list"),
     BotCommand("portfolio", "Portfolio summary (value, P&L, top holdings)"),
+    BotCommand("performance", "Performance by period: today, week, month, YTD, 1y, all time"),
     BotCommand("import", "Import transactions from a broker CSV"),
     BotCommand("backup", "Export Ghostfolio data to local file or Telegram"),
     BotCommand("restore", "Restore Ghostfolio data from a backup file"),
@@ -62,6 +64,7 @@ def main() -> None:
     app.add_handler(CommandHandler("start", start_handler))
     app.add_handler(CommandHandler("help", help_handler))
     app.add_handler(CommandHandler("portfolio", portfolio_handler))
+    app.add_handler(CommandHandler("performance", performance_handler))
     app.add_handler(CommandHandler("backup", backup_handler))
 
     logger.info("Bot is running. Press Ctrl+C to stop.")

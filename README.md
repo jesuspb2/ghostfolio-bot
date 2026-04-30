@@ -9,6 +9,7 @@ A Telegram bot that acts as a companion to your [Ghostfolio](https://github.com/
 ## Features
 
 - **Portfolio summary** — current value, P&L, and top holdings at a glance
+- **Performance dashboard** — gain/loss across today, this week, month, YTD, 1 year, and all time in one message
 - **CSV import** — upload a broker export and the bot auto-detects the format, resolves symbols via Yahoo Finance, deduplicates against existing activities, and imports
 - **Backups** — export your full Ghostfolio data on demand or on a schedule; send to Telegram or save locally, with optional encryption
 - **Account management** — create Ghostfolio accounts directly from Telegram
@@ -83,6 +84,7 @@ uv run ghostfolio-bot
 |---------|-------------|
 | `/start` | Welcome message and command list |
 | `/portfolio` | Portfolio summary with P&L and top holdings |
+| `/performance` | Performance by period: today, week, month, YTD, 1 year, all time |
 | `/import` | Upload a broker CSV/XLS to import activities |
 | `/backup` | Export all Ghostfolio data to local file, Telegram, or S3 |
 | `/restore` | List available local backups |

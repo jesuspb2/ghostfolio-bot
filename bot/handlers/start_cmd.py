@@ -14,6 +14,7 @@ HELP_TEXT = """
 Available commands:
 
 /portfolio — Portfolio summary (value, P&L, top holdings)
+/performance — Performance by period: today, week, month, YTD, 1y, all time
 /import — Import transactions from a broker CSV
 /backup — Export Ghostfolio data to local file or Telegram
 /restore — List available backups
