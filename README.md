@@ -155,6 +155,33 @@ Keep the key somewhere safe — without it the backup cannot be decrypted.
 
 Backups are compressed with gzip before storing/sending.
 
+**Decrypting a backup manually** — if you need to inspect or restore a `.json.gz.enc` file outside the bot:
+
+```python
+from cryptography.fernet import Fernet
+import gzip, json
+
+BACKUP_ENCRYPTION_KEY = "your-key-from-.env"
+
+with open("ghostfolio_backup_2026-01-01_000000.json.gz.enc", "rb") as f:
+    encrypted = f.read()
+
+json_bytes = gzip.decompress(Fernet(BACKUP_ENCRYPTION_KEY.encode()).decrypt(encrypted))
+data = json.loads(json_bytes)
+print(json.dumps(data, indent=2))
+```
+
+Or as a one-liner to save the result to a file:
+
+```bash
+python3 -c "
+from cryptography.fernet import Fernet; import gzip, sys
+key = 'YOUR_BACKUP_ENCRYPTION_KEY'
+raw = open(sys.argv[1], 'rb').read()
+print(gzip.decompress(Fernet(key.encode()).decrypt(raw)).decode())
+" ghostfolio_backup_2026-01-01_000000.json.gz.enc > backup.json
+```
+
 ---
 
 ## Import mode

@@ -10,7 +10,7 @@ from telegram.ext import Application, ApplicationBuilder, CommandHandler
 
 from bot.backup.scheduler import start_scheduler, stop_scheduler
 from bot.config import settings
-from bot.handlers.backup_cmd import backup_handler, restore_handler
+from bot.handlers.backup_cmd import backup_handler, build_restore_conversation
 from bot.handlers.create_account_cmd import build_create_account_conversation
 from bot.handlers.import_cmd import build_import_conversation
 from bot.handlers.portfolio_cmd import portfolio_handler
@@ -21,7 +21,7 @@ _COMMANDS = [
     BotCommand("portfolio", "Portfolio summary (value, P&L, top holdings)"),
     BotCommand("import", "Import transactions from a broker CSV"),
     BotCommand("backup", "Export Ghostfolio data to local file or Telegram"),
-    BotCommand("restore", "List available backups"),
+    BotCommand("restore", "Restore Ghostfolio data from a backup file"),
     BotCommand("create_account", "Create a new Ghostfolio account"),
     BotCommand("help", "Show available commands"),
 ]
@@ -57,12 +57,12 @@ def main() -> None:
 
     app.add_handler(build_import_conversation())
     app.add_handler(build_create_account_conversation())
+    app.add_handler(build_restore_conversation())
 
     app.add_handler(CommandHandler("start", start_handler))
     app.add_handler(CommandHandler("help", help_handler))
     app.add_handler(CommandHandler("portfolio", portfolio_handler))
     app.add_handler(CommandHandler("backup", backup_handler))
-    app.add_handler(CommandHandler("restore", restore_handler))
 
     logger.info("Bot is running. Press Ctrl+C to stop.")
     app.run_polling()
