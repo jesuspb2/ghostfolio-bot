@@ -10,6 +10,7 @@ A Telegram bot that acts as a companion to your [Ghostfolio](https://github.com/
 
 - **Portfolio summary** — current value, P&L, and top holdings at a glance
 - **CSV import** — upload a broker export and the bot auto-detects the format, resolves symbols via Yahoo Finance, deduplicates against existing activities, and imports
+- **Backups** — export your full Ghostfolio data on demand or on a schedule; send to Telegram or save locally, with optional encryption
 - **Account management** — create Ghostfolio accounts directly from Telegram
 - **Access control** — restrict the bot to a whitelist of Telegram user IDs
 
@@ -83,6 +84,8 @@ uv run ghostfolio-bot
 | `/start` | Welcome message and command list |
 | `/portfolio` | Portfolio summary with P&L and top holdings |
 | `/import` | Upload a broker CSV/XLS to import activities |
+| `/backup` | Export all Ghostfolio data to local file, Telegram, or S3 |
+| `/restore` | List available local backups |
 | `/create_account` | Create a new Ghostfolio account |
 | `/help` | Show all available commands |
 
@@ -109,6 +112,48 @@ docker compose down
 The container restarts automatically on failure or system reboot (`restart: unless-stopped`). Ghostfolio itself is external — just point `GHOSTFOLIO_URL` at your instance.
 
 > If your Ghostfolio runs in Docker on the same machine, set `GHOSTFOLIO_URL=http://host.docker.internal:3333` so the bot can reach it.
+
+The compose file mounts a `./backups` directory from the host into the container so local backups survive container restarts and image updates:
+
+```yaml
+volumes:
+  - ./backups:/app/backups
+```
+
+---
+
+## Backups
+
+Set `BACKUP_STORAGE` in `.env` to control where backups go:
+
+| Value | Behaviour |
+|-------|-----------|
+| `telegram` | Bot sends you the backup as a `.json.gz` file in chat (default, no extra setup) |
+| `local` | Saved to `BACKUP_LOCAL_DIR` on the server (persisted via Docker volume) |
+
+**Automatic backups** — set a schedule to run backups without any manual action:
+
+```env
+BACKUP_SCHEDULE=daily      # every day at 2am
+BACKUP_SCHEDULE=weekly     # every Monday at 2am
+BACKUP_SCHEDULE=monthly    # 1st of each month at 2am
+BACKUP_SCHEDULE=quarterly  # 1st of Jan, Apr, Jul, Oct at 2am
+```
+
+**Encryption** — optionally encrypt backups before saving or sending. The file will be saved as `.json.gz.enc` and can only be opened with the key.
+
+1. Generate a key:
+   ```bash
+   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+   ```
+2. Add it to `.env`:
+   ```env
+   BACKUP_ENCRYPTION_KEY=your-generated-key
+   ```
+
+Keep the key somewhere safe — without it the backup cannot be decrypted.
+
+Backups are compressed with gzip before storing/sending.
 
 ---
 

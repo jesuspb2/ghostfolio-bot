@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Literal
 
 from pydantic import field_validator
@@ -27,6 +28,15 @@ class Settings(BaseSettings):
     # Import mode: "direct" = POST to Ghostfolio; "json" = send JSON file for manual import
     import_mode: Literal["direct", "json"] = "json"
 
+    # Backup
+    backup_storage: Literal["telegram", "local"] = "telegram"
+    backup_local_dir: Path = Path("backups")
+    # Schedule: daily | weekly | monthly | quarterly  (or leave empty to disable)
+    backup_schedule: str | None = None
+    # Optional encryption: generate a key with:
+    #   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    backup_encryption_key: str | None = None
+
     # Logging
     log_level: str = "INFO"
 
@@ -39,6 +49,20 @@ class Settings(BaseSettings):
             if not v.strip():
                 return []
             return [int(uid.strip()) for uid in v.split(",")]
+        return v
+
+    @field_validator("backup_schedule", mode="before")
+    @classmethod
+    def parse_backup_schedule(cls, v: str | None) -> str | None:
+        presets: dict[str, str] = {
+            "daily":     "0 2 * * *",
+            "weekly":    "0 2 * * 1",
+            "monthly":   "0 2 1 * *",
+            "quarterly": "0 2 1 1,4,7,10 *",
+        }
+        if isinstance(v, str):
+            normalized = v.strip().lower()
+            return presets.get(normalized, v.strip()) or None
         return v
 
     @field_validator("ghostfolio_url", mode="after")

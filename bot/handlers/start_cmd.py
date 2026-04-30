@@ -15,6 +15,8 @@ Available commands:
 
 /portfolio — Portfolio summary (value, P&L, top holdings)
 /import — Import transactions from a broker CSV
+/backup — Export Ghostfolio data to local file or Telegram
+/restore — List available backups
 /help — Show this message
 """
 
