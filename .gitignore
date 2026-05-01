@@ -4,6 +4,7 @@ CLAUDE.md
 prompt.md
 .env
 data/
+backups/
 
 # Python
 __pycache__/
