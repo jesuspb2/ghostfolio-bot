@@ -6,26 +6,27 @@ import logging
 from typing import Any
 
 from telegram import BotCommand
-from telegram.ext import Application, ApplicationBuilder, CommandHandler
+from telegram.ext import Application, ApplicationBuilder, CommandHandler, MessageHandler, filters
 
 from bot.backup.scheduler import start_scheduler, stop_scheduler
 from bot.config import settings
 from bot.handlers.backup_cmd import backup_handler, build_restore_conversation
 from bot.handlers.create_account_cmd import build_create_account_conversation
+from bot.handlers.dividends_cmd import dividends_handler
 from bot.handlers.import_cmd import build_import_conversation
 from bot.handlers.performance_cmd import performance_handler
 from bot.handlers.portfolio_cmd import portfolio_handler
-from bot.handlers.start_cmd import help_handler, start_handler
+from bot.handlers.start_cmd import fallback_handler, start_handler
 
 _COMMANDS = [
     BotCommand("start", "Welcome message and command list"),
     BotCommand("portfolio", "Portfolio summary (value, P&L, top holdings)"),
     BotCommand("performance", "Performance by period: today, week, month, YTD, 1y, all time"),
+    BotCommand("dividends", "Dividend history: this month, year, and monthly chart"),
     BotCommand("import", "Import transactions from a broker CSV"),
     BotCommand("backup", "Export Ghostfolio data to local file or Telegram"),
-    BotCommand("restore", "Restore Ghostfolio data from a backup file"),
+    BotCommand("restore", "Restore Ghostfolio data from a backup"),
     BotCommand("create_account", "Create a new Ghostfolio account"),
-    BotCommand("help", "Show available commands"),
 ]
 
 
@@ -62,10 +63,11 @@ def main() -> None:
     app.add_handler(build_restore_conversation())
 
     app.add_handler(CommandHandler("start", start_handler))
-    app.add_handler(CommandHandler("help", help_handler))
     app.add_handler(CommandHandler("portfolio", portfolio_handler))
     app.add_handler(CommandHandler("performance", performance_handler))
+    app.add_handler(CommandHandler("dividends", dividends_handler))
     app.add_handler(CommandHandler("backup", backup_handler))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, fallback_handler))
 
     logger.info("Bot is running. Press Ctrl+C to stop.")
     app.run_polling()

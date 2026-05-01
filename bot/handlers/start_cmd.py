@@ -1,4 +1,4 @@
-"""Handler for /start and /help commands."""
+"""Handler for /start command and unknown message fallback."""
 
 from __future__ import annotations
 
@@ -8,31 +8,36 @@ from telegram.ext import ContextTypes
 
 from bot.utils.auth import restricted
 
-HELP_TEXT = """
-*Ghostfolio Companion Bot*
+WELCOME_TEXT = """
+👋 *Welcome to your Ghostfolio Companion Bot\!*
 
-Available commands:
+Here's what I can do for you:
 
-/portfolio — Portfolio summary (value, P&L, top holdings)
-/performance — Performance by period: today, week, month, YTD, 1y, all time
-/import — Import transactions from a broker CSV
-/backup — Export Ghostfolio data to local file or Telegram
-/restore — List available backups
-/help — Show this message
+📊 /portfolio — Current portfolio value, P&L, and top holdings
+📈 /performance — Gains and losses by period \(today, week, month, YTD, 1y, all time\)
+💰 /dividends — Dividend history and monthly chart
+📥 /import — Import transactions from a broker CSV \(DEGIRO, IBKR, Revolut…\)
+💾 /backup — Export your Ghostfolio data to a local file or Telegram
+♻️ /restore — Restore Ghostfolio data from a backup
+🏦 /create\_account — Create a new account in Ghostfolio
+
+Type any command to get started\!
 """
+
+
+async def _send_welcome(update: Update) -> None:
+    if update.message:
+        await update.message.chat.send_action(ChatAction.TYPING)
+        await update.message.reply_text(WELCOME_TEXT, parse_mode="MarkdownV2")
 
 
 @restricted
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Send welcome message."""
-    if update.message:
-        await update.message.chat.send_action(ChatAction.TYPING)
-        await update.message.reply_text(HELP_TEXT, parse_mode="Markdown")
+    await _send_welcome(update)
 
 
 @restricted
-async def help_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Send help message."""
-    if update.message:
-        await update.message.chat.send_action(ChatAction.TYPING)
-        await update.message.reply_text(HELP_TEXT, parse_mode="Markdown")
+async def fallback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Reply to unknown messages with the command list."""
+    await _send_welcome(update)

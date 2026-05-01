@@ -85,6 +85,7 @@ uv run ghostfolio-bot
 | `/start` | Welcome message and command list |
 | `/portfolio` | Portfolio summary with P&L and top holdings |
 | `/performance` | Performance by period: today, week, month, YTD, 1 year, all time |
+| `/dividends` | Dividend history: this month, this year, all-time, and a 12-month bar chart |
 | `/import` | Upload a broker CSV/XLS to import activities |
 | `/backup` | Export all Ghostfolio data to local file, Telegram, or S3 |
 | `/restore` | List available local backups |
