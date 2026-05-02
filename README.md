@@ -2,7 +2,7 @@
 
 A Telegram bot that acts as a companion to your [Ghostfolio](https://github.com/ghostfolio/ghostfolio) instance — self-hosted or cloud. Import broker CSVs, track your portfolio, and manage accounts — all from Telegram.
 
-<img src="docs/demo.gif" alt="Bot demo" width="400">
+<img src="docs/demo.gif" alt="Bot demo" width="600">
 
 > **Works with any Ghostfolio instance.** The bot connects via the Ghostfolio REST API — point it at your self-hosted server or at [ghostfol.io](https://ghostfol.io). Primarily designed for self-hosted setups where you control your data.
 
@@ -113,7 +113,7 @@ Upload a broker CSV (or XLS) and the bot handles the rest:
 3. **Deduplicates** against existing Ghostfolio activities
 4. Shows a **preview** — new vs skipped — before you confirm
 
-<img src="docs/import_demo.gif" alt="Import command demo" width="400">
+<img src="docs/import_demo.gif" alt="Import command demo" width="800">
 
 #### Supported brokers
 
