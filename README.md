@@ -193,7 +193,12 @@ print(json.dumps(data, indent=2))
 
 ### `/restore`
 
-List available local backups and restore your Ghostfolio data from a previous export.
+Restore Ghostfolio activities from a backup file:
+
+1. If `BACKUP_STORAGE=local`, the bot lists your most recent local backups
+2. Send the `.json.gz` (or `.json.gz.enc`) file you want to restore
+3. The bot decrypts and parses it, deduplicates against existing activities, and shows a preview: activities in backup, already in Ghostfolio, and new to restore
+4. Confirm to import — or cancel
 
 ---
 
