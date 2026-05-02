@@ -35,7 +35,7 @@ def test_buy_activity() -> None:
     assert big_buy.unit_price == 1.0
     assert big_buy.symbol == "IE000AZVL3K0"
     assert big_buy.currency == "EUR"
-    assert big_buy.data_source == "MANUAL"
+    assert big_buy.data_source == "YAHOO"
 
 
 def test_interest_maps_to_dividend() -> None:
@@ -101,8 +101,8 @@ def test_symbol_is_isin() -> None:
         assert a.symbol == "IE000AZVL3K0"
 
 
-def test_data_source_is_manual() -> None:
+def test_data_source_is_yahoo() -> None:
     parser = RevolutSavingsParser()
     activities = parser.parse(SAMPLE_CSV)
     for a in activities:
-        assert a.data_source == "MANUAL"
+        assert a.data_source == "YAHOO"

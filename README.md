@@ -2,32 +2,9 @@
 
 A Telegram bot that acts as a companion to your [Ghostfolio](https://github.com/ghostfolio/ghostfolio) instance — self-hosted or cloud. Import broker CSVs, track your portfolio, and manage accounts — all from Telegram.
 
+<img src="docs/demo.gif" alt="Bot demo" width="400">
+
 > **Works with any Ghostfolio instance.** The bot connects via the Ghostfolio REST API — point it at your self-hosted server or at [ghostfol.io](https://ghostfol.io). Primarily designed for self-hosted setups where you control your data.
-
----
-
-## Features
-
-- **Portfolio summary** — current value, P&L, and top holdings at a glance
-- **Performance dashboard** — gain/loss across today, this week, month, YTD, 1 year, and all time in one message
-- **CSV import** — upload a broker export and the bot auto-detects the format, resolves symbols via Yahoo Finance, deduplicates against existing activities, and imports
-- **Backups** — export your full Ghostfolio data on demand or on a schedule; send to Telegram or save locally, with optional encryption
-- **Account management** — create Ghostfolio accounts directly from Telegram
-- **Access control** — restrict the bot to a whitelist of Telegram user IDs
-
-### Supported brokers
-
-| Broker | Type | Notes |
-|--------|------|-------|
-| Revolut Stocks | CSV | BUY, SELL, DIVIDEND |
-| Revolut Savings | CSV | INTEREST |
-| Revolut Crypto | CSV | BUY, SELL |
-| DEGIRO | CSV | Dutch & English exports; fee pairing |
-| IBKR (Interactive Brokers) | CSV | Trades & Dividends exports |
-| MyInvestor | XLS | Spanish broker |
-| Delta | CSV | Crypto portfolio tracker |
-
-> **Want to add a broker?** See [Adding a parser](#adding-a-parser).
 
 ---
 
@@ -78,19 +55,151 @@ IMPORT_MODE=direct                       # "direct" or "json"
 uv run ghostfolio-bot
 ```
 
-### 4. Available commands
+---
 
-| Command | Description |
-|---------|-------------|
-| `/start` | Welcome message and command list |
-| `/portfolio` | Portfolio summary with P&L and top holdings |
-| `/performance` | Performance by period: today, week, month, YTD, 1 year, all time |
-| `/dividends` | Dividend history: this month, this year, all-time, and a 12-month bar chart |
-| `/import` | Upload a broker CSV/XLS to import activities |
-| `/backup` | Export all Ghostfolio data to local file, Telegram, or S3 |
-| `/restore` | List available local backups |
-| `/create_account` | Create a new Ghostfolio account |
-| `/help` | Show all available commands |
+## Commands
+
+<table>
+<tr>
+<td style="width:50%;vertical-align:top">
+
+### `/start`
+
+Welcome message with a summary of available commands.
+
+<img src="docs/start.png" alt="Start command" width="320">
+
+</td>
+<td style="width:50%;vertical-align:top">
+
+### `/portfolio`
+
+Portfolio summary: current value, total P&L, and your top holdings ranked by allocation.
+
+<img src="docs/portfolio.png" alt="Portfolio command" width="320">
+
+</td>
+</tr>
+<tr>
+<td style="width:50%;vertical-align:top">
+
+### `/performance`
+
+Gain/loss dashboard across every time period — today, this week, this month, YTD, 1 year, and all time — with a bar chart of period-by-period returns.
+
+<img src="docs/performance.png" alt="Performance command" width="320">
+
+</td>
+<td style="width:50%;vertical-align:top">
+
+### `/dividends`
+
+Dividend history: this month, this year, all-time totals, and a 12-month bar chart showing income over time.
+
+<img src="docs/dividens.png" alt="Dividends command" width="320">
+
+</td>
+</tr>
+</table>
+
+---
+
+### `/import`
+
+Upload a broker CSV (or XLS) and the bot handles the rest:
+
+1. **Auto-detects** the broker by matching the file header against known signatures
+2. **Resolves symbols** via Yahoo Finance (ISIN → ticker), with an on-disk cache
+3. **Deduplicates** against existing Ghostfolio activities
+4. Shows a **preview** — new vs skipped — before you confirm
+
+<img src="docs/import_demo.gif" alt="Import command demo" width="400">
+
+#### Supported brokers
+
+| Broker | Type | Notes |
+|--------|------|-------|
+| Revolut Stocks | CSV | BUY, SELL, DIVIDEND |
+| Revolut Savings | CSV | INTEREST |
+| Revolut Crypto | CSV | BUY, SELL |
+| DEGIRO | CSV | Dutch & English exports; fee pairing |
+| IBKR (Interactive Brokers) | CSV | Trades & Dividends exports |
+| MyInvestor | XLS | Spanish broker |
+| Delta | CSV | Crypto portfolio tracker |
+
+> **Want to add a broker?** See [Adding a parser](#adding-a-parser).
+
+#### Import mode
+
+Set `IMPORT_MODE` in `.env`:
+
+| Value | Behaviour |
+|-------|-----------|
+| `direct` | Activities are posted straight to Ghostfolio via the API |
+| `json` | Generates a JSON file you can import manually via the Ghostfolio UI |
+
+---
+
+### `/backup`
+
+Export your full Ghostfolio data on demand. Backups are compressed with gzip and can optionally be encrypted.
+
+Set `BACKUP_STORAGE` in `.env`:
+
+| Value | Behaviour |
+|-------|-----------|
+| `telegram` | Bot sends you the backup as a `.json.gz` file in chat (default) |
+| `local` | Saved to `BACKUP_LOCAL_DIR` on the server (persisted via Docker volume) |
+
+**Automatic backups** — set a schedule so backups run without manual action:
+
+```env
+BACKUP_SCHEDULE=daily      # every day at 2am
+BACKUP_SCHEDULE=weekly     # every Monday at 2am
+BACKUP_SCHEDULE=monthly    # 1st of each month at 2am
+BACKUP_SCHEDULE=quarterly  # 1st of Jan, Apr, Jul, Oct at 2am
+```
+
+**Encryption** — optionally encrypt backups before saving or sending. Files are saved as `.json.gz.enc` and can only be opened with the key.
+
+1. Generate a key:
+   ```bash
+   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+   ```
+2. Add it to `.env`:
+   ```env
+   BACKUP_ENCRYPTION_KEY=your-generated-key
+   ```
+
+Keep the key somewhere safe — without it the backup cannot be decrypted.
+
+**Decrypting a backup manually:**
+
+```python
+from cryptography.fernet import Fernet
+import gzip, json
+
+BACKUP_ENCRYPTION_KEY = "your-key-from-.env"
+
+with open("ghostfolio_backup_2026-01-01_000000.json.gz.enc", "rb") as f:
+    encrypted = f.read()
+
+json_bytes = gzip.decompress(Fernet(BACKUP_ENCRYPTION_KEY.encode()).decrypt(encrypted))
+data = json.loads(json_bytes)
+print(json.dumps(data, indent=2))
+```
+
+---
+
+### `/restore`
+
+List available local backups and restore your Ghostfolio data from a previous export.
+
+---
+
+### `/create_account`
+
+Create a new Ghostfolio account directly from Telegram without opening the web UI.
 
 ---
 
@@ -122,89 +231,6 @@ The compose file mounts a `./backups` directory from the host into the container
 volumes:
   - ./backups:/app/backups
 ```
-
----
-
-## Backups
-
-Set `BACKUP_STORAGE` in `.env` to control where backups go:
-
-| Value | Behaviour |
-|-------|-----------|
-| `telegram` | Bot sends you the backup as a `.json.gz` file in chat (default, no extra setup) |
-| `local` | Saved to `BACKUP_LOCAL_DIR` on the server (persisted via Docker volume) |
-
-**Automatic backups** — set a schedule to run backups without any manual action:
-
-```env
-BACKUP_SCHEDULE=daily      # every day at 2am
-BACKUP_SCHEDULE=weekly     # every Monday at 2am
-BACKUP_SCHEDULE=monthly    # 1st of each month at 2am
-BACKUP_SCHEDULE=quarterly  # 1st of Jan, Apr, Jul, Oct at 2am
-```
-
-**Encryption** — optionally encrypt backups before saving or sending. The file will be saved as `.json.gz.enc` and can only be opened with the key.
-
-1. Generate a key:
-   ```bash
-   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
-   ```
-2. Add it to `.env`:
-   ```env
-   BACKUP_ENCRYPTION_KEY=your-generated-key
-   ```
-
-Keep the key somewhere safe — without it the backup cannot be decrypted.
-
-Backups are compressed with gzip before storing/sending.
-
-**Decrypting a backup manually** — if you need to inspect or restore a `.json.gz.enc` file outside the bot:
-
-```python
-from cryptography.fernet import Fernet
-import gzip, json
-
-BACKUP_ENCRYPTION_KEY = "your-key-from-.env"
-
-with open("ghostfolio_backup_2026-01-01_000000.json.gz.enc", "rb") as f:
-    encrypted = f.read()
-
-json_bytes = gzip.decompress(Fernet(BACKUP_ENCRYPTION_KEY.encode()).decrypt(encrypted))
-data = json.loads(json_bytes)
-print(json.dumps(data, indent=2))
-```
-
-Or as a one-liner to save the result to a file:
-
-```bash
-python3 -c "
-from cryptography.fernet import Fernet; import gzip, sys
-key = 'YOUR_BACKUP_ENCRYPTION_KEY'
-raw = open(sys.argv[1], 'rb').read()
-print(gzip.decompress(Fernet(key.encode()).decrypt(raw)).decode())
-" ghostfolio_backup_2026-01-01_000000.json.gz.enc > backup.json
-```
-
----
-
-## Import mode
-
-Set `IMPORT_MODE` in `.env`:
-
-| Value | Behaviour |
-|-------|-----------|
-| `direct` | Activities are posted straight to Ghostfolio via the API |
-| `json` | Generates a JSON file you can import manually via the Ghostfolio UI |
-
----
-
-## How CSV import works
-
-1. Upload a CSV (or XLS) file to the bot
-2. The bot auto-detects the broker by matching the header against known signatures
-3. Symbols are resolved via Yahoo Finance (ISIN → ticker), with an on-disk cache
-4. Existing activities are fetched from Ghostfolio and duplicates are filtered out
-5. A preview shows new vs skipped activities — confirm to import
 
 ---
 

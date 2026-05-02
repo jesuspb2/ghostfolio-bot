@@ -24,7 +24,7 @@ import difflib
 import io
 import logging
 import re
-from collections.abc import Callable
+import unicodedata
 from datetime import datetime
 from typing import Any, ClassVar
 
@@ -80,6 +80,16 @@ _FEE_LIKE_KEYWORDS = [
     "retención",
 ]
 
+# Pre-compiled regexes for keyword matching (faster than any(k in t) for 10+ keywords)
+_IGNORED_RE = re.compile("|".join(re.escape(k) for k in _IGNORED_KEYWORDS))
+_PLATFORM_FEE_RE = re.compile("|".join(re.escape(k) for k in _PLATFORM_FEE_KEYWORDS))
+_FEE_LIKE_RE = re.compile("|".join(re.escape(k) for k in _FEE_LIKE_KEYWORDS))
+
+# Pre-compiled regexes for _sanitise_symbol (avoid recompiling on every call)
+_RE_NON_ALNUM = re.compile(r"[^A-Za-z0-9\s-]")
+_RE_SPACES = re.compile(r"\s+")
+_RE_MULTI_DASH = re.compile(r"-{2,}")
+
 
 def _sanitise_symbol(description: str) -> str:
     """Create a short Ghostfolio-safe symbol from a free-text description.
@@ -88,13 +98,11 @@ def _sanitise_symbol(description: str) -> str:
     MANUAL symbols. We normalise to ASCII, keep only alphanumerics and hyphens,
     collapse runs, and cap at 32 chars.
     """
-    import re as _re
-    import unicodedata
     s = unicodedata.normalize("NFKD", description)
     s = s.encode("ascii", "ignore").decode("ascii")
-    s = _re.sub(r"[^A-Za-z0-9\s-]", "", s)
-    s = _re.sub(r"\s+", "-", s.strip())
-    s = _re.sub(r"-{2,}", "-", s)
+    s = _RE_NON_ALNUM.sub("", s)
+    s = _RE_SPACES.sub("-", s.strip())
+    s = _RE_MULTI_DASH.sub("-", s)
     return s[:32].rstrip("-") or "FEE"
 
 
@@ -111,17 +119,12 @@ def _normalise_currency(raw: str) -> str:
     return ""
 
 
-def _contains(text: str, keywords: list[str]) -> bool:
-    t = text.lower()
-    return any(k in t for k in keywords)
-
-
 def _is_ignored(desc: str) -> bool:
-    return _contains(desc, _IGNORED_KEYWORDS)
+    return bool(_IGNORED_RE.search(desc.lower()))
 
 
 def _is_platform_fee(desc: str) -> bool:
-    return _contains(desc, _PLATFORM_FEE_KEYWORDS)
+    return bool(_PLATFORM_FEE_RE.search(desc.lower()))
 
 
 def _is_interest(desc: str) -> bool:
@@ -129,7 +132,7 @@ def _is_interest(desc: str) -> bool:
 
 
 def _is_fee_like(desc: str) -> bool:
-    return _contains(desc, _FEE_LIKE_KEYWORDS)
+    return bool(_FEE_LIKE_RE.search(desc.lower()))
 
 
 def _is_buy_sell(desc: str) -> bool:
@@ -227,6 +230,33 @@ class DegiroParser(BrokerParser):
         activities: list[GhostfolioActivity] = []
         consumed: set[int] = set()
 
+        # Pre-build indexes so partner lookups are O(1) instead of O(n).
+        # oid_index: order_id → [indices of records with that order_id]
+        # div_index: (isin, date) → [indices of records with no order_id]
+        oid_index: dict[str, list[int]] = {}
+        div_index: dict[tuple[str, str], list[int]] = {}
+        for i, rec in enumerate(records):
+            if rec["order_id"]:
+                oid_index.setdefault(rec["order_id"], []).append(i)
+            elif rec["isin"] and rec["date"]:
+                div_index.setdefault((rec["isin"], rec["date"]), []).append(i)
+
+        def _find_by_oid(
+            order_id: str, exclude: int, predicate: Any
+        ) -> tuple[int, dict[str, Any]] | None:
+            for i in oid_index.get(order_id, []):
+                if i != exclude and i not in consumed and predicate(records[i]):
+                    return i, records[i]
+            return None
+
+        def _find_by_div_key(
+            isin: str, date: str, exclude: int, predicate: Any
+        ) -> tuple[int, dict[str, Any]] | None:
+            for i in div_index.get((isin, date), []):
+                if i != exclude and i not in consumed and predicate(records[i]):
+                    return i, records[i]
+            return None
+
         for idx, rec in enumerate(records):
             if idx in consumed:
                 continue
@@ -252,19 +282,16 @@ class DegiroParser(BrokerParser):
                 continue
 
             # Fee-like + dividend keyword → dividend withholding tax.
-            # May appear before or after its dividend record (look ahead for partner).
+            # May appear before or after its dividend record (look up by isin+date).
             if _is_fee_like(desc) and _is_dividend(desc):
                 if rec["order_id"]:
                     # Has orderId → unusual, skip rather than misclassify
                     continue
-                result = _find_ahead(
-                    records, idx + 1, consumed,
-                    lambda r, isin=rec["isin"], date=rec["date"]: (  # type: ignore[misc]
-                        r["isin"] == isin
-                        and r["date"] == date
-                        and _is_dividend(r["description"])
+                result = _find_by_div_key(
+                    rec["isin"], rec["date"], idx,
+                    lambda r: (
+                        _is_dividend(r["description"])
                         and not _is_fee_like(r["description"])
-                        and not r["order_id"]
                     ),
                 )
                 if result:
@@ -274,18 +301,16 @@ class DegiroParser(BrokerParser):
                         activities.append(a)
                     consumed.add(idx)
                     consumed.add(div_idx)
-                # No matching dividend found ahead → skip (orphan or already consumed behind)
+                # No matching dividend found → skip (orphan or already consumed)
                 continue
 
-            # Pure transaction fee (no dividend keyword) with orderId → look ahead for buy/sell.
+            # Pure transaction fee (no dividend keyword) with orderId → find buy/sell partner.
             if _is_fee_like(desc):
                 order_id = rec["order_id"]
                 if order_id:
-                    result = _find_ahead(
-                        records, idx + 1, consumed,
-                        lambda r, oid=order_id: (  # type: ignore[misc]
-                            r["order_id"] == oid and _is_buy_sell(r["description"])
-                        ),
+                    result = _find_by_oid(
+                        order_id, idx,
+                        lambda r: _is_buy_sell(r["description"]),
                     )
                     if result:
                         buy_idx, buy_rec = result
@@ -302,11 +327,9 @@ class DegiroParser(BrokerParser):
                 order_id = rec["order_id"]
                 fee_rec = None
                 if order_id:
-                    result = _find_ahead(
-                        records, idx + 1, consumed,
-                        lambda r, oid=order_id: (  # type: ignore[misc]
-                            r["order_id"] == oid and _is_fee_like(r["description"])
-                        ),
+                    result = _find_by_oid(
+                        order_id, idx,
+                        lambda r: _is_fee_like(r["description"]),
                     )
                     if result:
                         fee_idx, fee_rec = result
@@ -317,16 +340,11 @@ class DegiroParser(BrokerParser):
                 consumed.add(idx)
                 continue
 
-            # Dividend record → look ahead for withholding tax (same ISIN + date, no orderId)
+            # Dividend record → find withholding tax partner (same ISIN + date, no orderId)
             if _is_dividend(desc):
-                result = _find_ahead(
-                    records, idx + 1, consumed,
-                    lambda r, isin=rec["isin"], date=rec["date"]: (  # type: ignore[misc]
-                        r["isin"] == isin
-                        and r["date"] == date
-                        and _is_fee_like(r["description"])
-                        and not r["order_id"]
-                    ),
+                result = _find_by_div_key(
+                    rec["isin"], rec["date"], idx,
+                    lambda r: _is_fee_like(r["description"]),
                 )
                 tax_rec = None
                 if result:
@@ -458,13 +476,3 @@ class DegiroParser(BrokerParser):
         )
 
 
-def _find_ahead(
-    records: list[dict[str, Any]],
-    start: int,
-    consumed: set[int],
-    predicate: Callable[[dict[str, Any]], bool],
-) -> tuple[int, dict[str, Any]] | None:
-    for i in range(start, len(records)):
-        if i not in consumed and predicate(records[i]):
-            return i, records[i]
-    return None

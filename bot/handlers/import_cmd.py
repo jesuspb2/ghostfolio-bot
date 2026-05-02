@@ -338,7 +338,7 @@ async def _show_account_selection(
     if settings.ghostfolio_account_id:
         buttons.append([
             InlineKeyboardButton(
-                "Default account (from config)",
+                "Default account",
                 callback_data=f"{_ACCT_PREFIX}default",
             )
         ])
