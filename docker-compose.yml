@@ -5,3 +5,4 @@ services:
     env_file: .env
     volumes:
       - ./backups:/app/backups
+      - ./cache:/root/.cache/ghostfolio-bot

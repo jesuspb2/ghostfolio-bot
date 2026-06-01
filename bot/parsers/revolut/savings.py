@@ -9,8 +9,7 @@ Row types mapped to Ghostfolio:
   Interest Reinvested ... → SKIP  (paired with a BUY the next day, avoid double-count)
   Anything else           → SKIP
 
-The ISIN embedded in every Description is used as symbol (dataSource=YAHOO).
-The symbol resolver in the import flow converts the ISIN to a Yahoo Finance ticker.
+The ISIN embedded in every Description is used as symbol (dataSource=MANUAL).
 """
 
 from __future__ import annotations
@@ -113,7 +112,7 @@ class RevolutSavingsParser(BrokerParser):
 
         return GhostfolioActivity(
             currency=currency,
-            data_source="YAHOO",
+            data_source="MANUAL",
             date=date,
             fee=0.0,
             quantity=quantity,
