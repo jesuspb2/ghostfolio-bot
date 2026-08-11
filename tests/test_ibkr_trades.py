@@ -77,3 +77,11 @@ def test_gbx_converted_to_gbp() -> None:
     parser = IbkrTradesParser()
     activities = parser.parse(csv)
     assert activities[0].currency == "GBp"
+
+
+def test_header_only_report_returns_no_activities() -> None:
+    header_only = SAMPLE_CSV.splitlines()[0] + "\n"
+
+    activities = IbkrTradesParser().parse(header_only)
+
+    assert activities == []

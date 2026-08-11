@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Literal
 
-from pydantic import field_validator
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -24,6 +24,15 @@ class Settings(BaseSettings):
     ghostfolio_url: str = "http://localhost:3333"
     ghostfolio_access_token: str
     ghostfolio_account_id: str
+
+    # IBKR Flex Web Service (read-only Activity Flex Query)
+    ibkr_flex_token: SecretStr | None = None
+    ibkr_flex_query_id: str | None = None
+    ibkr_trade_confirmation_query_id: str | None = None
+    ibkr_flex_lookback_days: int = Field(default=365, ge=1, le=365)
+    # Destination account: explicit UUID takes precedence over the account name.
+    ibkr_ghostfolio_account_id: str | None = None
+    ibkr_ghostfolio_account_name: str = "Interactive Brokers"
 
     # Import mode: "direct" = POST to Ghostfolio; "json" = send JSON file for manual import
     import_mode: Literal["direct", "json"] = "json"

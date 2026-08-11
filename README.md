@@ -47,6 +47,13 @@ GHOSTFOLIO_URL=http://localhost:3333     # your Ghostfolio URL
 GHOSTFOLIO_ACCESS_TOKEN=your-token       # Settings → Security → Access token
 GHOSTFOLIO_ACCOUNT_ID=your-account-uuid  # account to import activities into
 IMPORT_MODE=direct                       # "direct" or "json"
+
+# Optional: direct IBKR → Ghostfolio sync
+IBKR_FLEX_TOKEN=your-flex-token
+IBKR_FLEX_QUERY_ID=your-flex-query-id
+IBKR_TRADE_CONFIRMATION_QUERY_ID=your-today-trade-confirmation-query-id
+IBKR_FLEX_LOOKBACK_DAYS=365
+IBKR_GHOSTFOLIO_ACCOUNT_NAME=Interactive Brokers
 ```
 
 ### 3. Run
@@ -137,6 +144,51 @@ Set `IMPORT_MODE` in `.env`:
 |-------|-----------|
 | `direct` | Activities are posted straight to Ghostfolio via the API |
 | `json` | Generates a JSON file you can import manually via the Ghostfolio UI |
+
+---
+
+### `/sync_ibkr`
+
+Generate the configured IBKR Activity Flex Query and sync its trades directly into
+Ghostfolio—without uploading a CSV manually. The bot resolves ISINs, compares the report with
+the destination account, skips existing activities, validates the new ones, and asks for
+confirmation before writing anything.
+
+Configure an **Activity Flex Query** in IBKR Client Portal with CSV output and these Trade
+fields in this order:
+
+```text
+Buy/Sell, TradeDate, ISIN, Quantity, TradePrice, TradeMoney,
+CurrencyPrimary, IBCommission, IBCommissionCurrency
+```
+
+Use a comma delimiter, include column headers, select the `yyyyMMdd` date format, and disable
+the optional BOF/EOF header and trailer records.
+
+Then enable **Flex Web Service Configuration** and add the generated token and the query ID to
+`.env`:
+
+```env
+IBKR_FLEX_TOKEN=your-flex-web-service-token
+IBKR_FLEX_QUERY_ID=your-trades-flex-query-id
+IBKR_TRADE_CONFIRMATION_QUERY_ID=your-today-trade-confirmation-query-id
+IBKR_FLEX_LOOKBACK_DAYS=365
+IBKR_GHOSTFOLIO_ACCOUNT_NAME=Interactive Brokers
+
+# Optional; takes precedence over the account name
+IBKR_GHOSTFOLIO_ACCOUNT_ID=your-ibkr-ghostfolio-account-uuid
+```
+
+By default, `/sync_ibkr` imports into the Ghostfolio account named exactly
+`Interactive Brokers`. Set `IBKR_GHOSTFOLIO_ACCOUNT_ID` only if you prefer to pin the
+destination by UUID.
+
+`IBKR_FLEX_LOOKBACK_DAYS` accepts 1–365 days. The Flex token is passed only to IBKR and full
+HTTP request URLs are suppressed from logs because IBKR requires the token as a query
+parameter. Activity Flex data is normally updated by IBKR once per day after market close, so
+the sync ends on the latest completed day rather than requesting the still-unavailable current
+day. Optionally configure a Trade Confirmation Flex Query with period `Today`; its individual
+executions are combined with the historical Activity query so same-day trades can be synced.
 
 ---
 
