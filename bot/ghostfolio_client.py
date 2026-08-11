@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any, cast
 
 import httpx
@@ -298,6 +298,29 @@ class GhostfolioClient:
             "platformId": None,
         }
         return cast(dict[str, Any], await self._request("POST", "/account", json=payload))
+
+    async def upsert_account_balance(
+        self,
+        *,
+        account_id: str,
+        balance: float,
+        balance_date: date,
+    ) -> dict[str, Any]:
+        """Create or replace an account's cash balance for a statement date."""
+        logger.info(
+            "Updating account cash balance (account_id=%s, date=%s)",
+            account_id,
+            balance_date.isoformat(),
+        )
+        payload = {
+            "accountId": account_id,
+            "balance": balance,
+            "date": f"{balance_date.isoformat()}T00:00:00.000Z",
+        }
+        return cast(
+            dict[str, Any],
+            await self._request("POST", "/account-balance", json=payload),
+        )
 
     # -- Export / Backup -------------------------------------------------------
 

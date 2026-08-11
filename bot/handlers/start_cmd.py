@@ -8,7 +8,7 @@ from telegram.ext import ContextTypes
 
 from bot.utils.auth import restricted
 
-WELCOME_TEXT = """
+WELCOME_TEXT = r"""
 👋 *Welcome to your Ghostfolio Companion Bot\!*
 
 Here's what I can do for you:
@@ -17,6 +17,7 @@ Here's what I can do for you:
 📈 /performance — Gains and losses by period \(today, week, month, YTD, 1y, all time\)
 💰 /dividends — Dividend history and monthly chart
 📥 /import — Import transactions from a broker CSV \(DEGIRO, IBKR, Revolut…\)
+🔄 /sync\_ibkr — Sync IBKR trades directly into Ghostfolio
 💾 /backup — Export your Ghostfolio data to a local file or Telegram
 ♻️ /restore — Restore Ghostfolio data from a backup
 🏦 /create\_account — Create a new account in Ghostfolio

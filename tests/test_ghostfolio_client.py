@@ -1,5 +1,7 @@
 """Tests for the Ghostfolio async client."""
 
+from datetime import date
+
 import pytest
 import respx
 from httpx import Response
@@ -92,6 +94,26 @@ async def test_get_accounts(mock_api):
         accounts = await gf.get_accounts()
         assert isinstance(accounts, list)
         assert accounts[0]["id"] == "abc"
+
+
+@pytest.mark.asyncio
+async def test_upsert_account_balance(mock_api):
+    route = mock_api.post("/account-balance").mock(
+        return_value=Response(201, json={"id": "balance-id", "value": 17.25})
+    )
+
+    async with GhostfolioClient(BASE_URL, ACCESS_TOKEN) as gf:
+        result = await gf.upsert_account_balance(
+            account_id="account-id",
+            balance=17.25,
+            balance_date=date(2026, 8, 10),
+        )
+
+    assert result["id"] == "balance-id"
+    assert route.calls[0].request.content == (
+        b'{"accountId":"account-id","balance":17.25,'
+        b'"date":"2026-08-10T00:00:00.000Z"}'
+    )
 
 
 @pytest.mark.asyncio

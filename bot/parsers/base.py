@@ -93,7 +93,7 @@ class BrokerParser(ABC):
             try:
                 reader = csv.DictReader(io.StringIO(content), delimiter=delimiter)
                 rows = list(reader)
-                if rows and reader.fieldnames and len(reader.fieldnames) > 1:
+                if reader.fieldnames and len(reader.fieldnames) > 1:
                     return rows
             except Exception:
                 continue
@@ -103,7 +103,7 @@ class BrokerParser(ABC):
             try:
                 reader = csv.DictReader(io.StringIO(content), delimiter=delimiter)
                 rows = list(reader)
-                if rows and reader.fieldnames and len(reader.fieldnames) > 1:
+                if reader.fieldnames and len(reader.fieldnames) > 1:
                     return rows
             except Exception:
                 continue

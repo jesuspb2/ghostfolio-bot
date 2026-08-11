@@ -17,6 +17,7 @@ from bot.handlers.import_cmd import build_import_conversation
 from bot.handlers.performance_cmd import performance_handler
 from bot.handlers.portfolio_cmd import portfolio_handler
 from bot.handlers.start_cmd import fallback_handler, start_handler
+from bot.handlers.sync_ibkr_cmd import build_sync_ibkr_conversation
 
 _COMMANDS = [
     BotCommand("start", "Welcome message and command list"),
@@ -24,6 +25,7 @@ _COMMANDS = [
     BotCommand("performance", "Performance by period: today, week, month, YTD, 1y, all time"),
     BotCommand("dividends", "Dividend history: this month, year, and monthly chart"),
     BotCommand("import", "Import transactions from a broker CSV"),
+    BotCommand("sync_ibkr", "Sync IBKR trades directly to Ghostfolio"),
     BotCommand("backup", "Export Ghostfolio data to local file or Telegram"),
     BotCommand("restore", "Restore Ghostfolio data from a backup"),
     BotCommand("create_account", "Create a new Ghostfolio account"),
@@ -45,6 +47,12 @@ def main() -> None:
         level=getattr(logging, settings.log_level.upper(), logging.INFO),
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
+    # httpx logs full request URLs at INFO. IBKR Flex credentials are query
+    # parameters, so keep transport logs at WARNING to avoid leaking tokens.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    # python-telegram-bot includes the bot token in transport URLs at DEBUG.
+    logging.getLogger("telegram").setLevel(logging.INFO)
     logger = logging.getLogger(__name__)
 
     logger.info("Starting Ghostfolio Companion Bot")
@@ -59,6 +67,7 @@ def main() -> None:
     )
 
     app.add_handler(build_import_conversation())
+    app.add_handler(build_sync_ibkr_conversation())
     app.add_handler(build_create_account_conversation())
     app.add_handler(build_restore_conversation())
 
