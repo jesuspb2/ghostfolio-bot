@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import date
+from math import isclose
 from typing import Any
 
 from bot.ghostfolio_client import (
@@ -12,6 +14,7 @@ from bot.ghostfolio_client import (
     deduplicate_activities,
     resolve_manual_symbols,
 )
+from bot.parsers.ibkr.cash_report import IbkrCashReportParser
 from bot.parsers.ibkr.trade_confirmations import IbkrTradeConfirmationsParser
 from bot.parsers.ibkr.trades import IbkrTradesParser
 from bot.parsers.symbol_resolver import resolve_symbols
@@ -34,6 +37,11 @@ class IbkrSyncPreview:
     invalid_currency_activities: int
     validation_errors: list[str]
     to_import: list[dict[str, Any]]
+    current_cash_balance: float
+    cash_balance: float | None
+    cash_balance_date: date | None
+    cash_balance_currency: str
+    cash_balance_changed: bool
 
 
 def select_ghostfolio_account(
@@ -79,6 +87,9 @@ async def prepare_ibkr_sync(
     account_id: str,
     ghostfolio: GhostfolioClient,
     trade_confirmation_content: str | None = None,
+    cash_report_content: str | None = None,
+    current_cash_balance: float = 0.0,
+    cash_balance_currency: str = "EUR",
 ) -> IbkrSyncPreview:
     """Parse, combine, resolve and validate IBKR historical and intraday trades."""
     parser = IbkrTradesParser()
@@ -100,6 +111,29 @@ async def prepare_ibkr_sync(
         intraday = confirmation_parser.parse(trade_confirmation_content)
 
     parsed = historical + intraday
+
+    cash_balance = None
+    cash_balance_date = None
+    if cash_report_content:
+        cash_parser = IbkrCashReportParser()
+        if not cash_parser.can_handle(cash_report_content):
+            raise IbkrSyncError(
+                "The Cash Report Flex Query is not returning the expected IBKR XML "
+                "format. Check its output format and selected columns."
+            )
+        try:
+            parsed_cash = cash_parser.parse(cash_report_content)
+        except (TypeError, ValueError) as exc:
+            raise IbkrSyncError(str(exc)) from exc
+        cash_balance = parsed_cash.ending_cash
+        cash_balance_date = parsed_cash.report_date
+
+    cash_balance_changed = cash_balance is not None and not isclose(
+        current_cash_balance,
+        cash_balance,
+        rel_tol=0,
+        abs_tol=0.000001,
+    )
     activity_dicts = [activity.to_dict(account_id) for activity in parsed]
     activity_dicts, unresolved_isins = await resolve_symbols(activity_dicts)
 
@@ -150,4 +184,9 @@ async def prepare_ibkr_sync(
         invalid_currency_activities=invalid_currency_count,
         validation_errors=validation_errors,
         to_import=to_import,
+        current_cash_balance=current_cash_balance,
+        cash_balance=cash_balance,
+        cash_balance_date=cash_balance_date,
+        cash_balance_currency=cash_balance_currency,
+        cash_balance_changed=cash_balance_changed,
     )

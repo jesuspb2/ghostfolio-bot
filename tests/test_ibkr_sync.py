@@ -27,6 +27,15 @@ TRADE_CONFIRMATIONS_XML = """\
 </FlexQueryResponse>
 """
 
+CASH_REPORT_XML = """\
+<FlexQueryResponse queryName="Cash" type="AF">
+  <FlexStatements count="1"><FlexStatement accountId="hidden"><CashReport>
+    <CashReportCurrency currency="BASE_SUMMARY" toDate="20260810"
+      endingCash="17.253492428" endingSettledCash="17.253492428" />
+  </CashReport></FlexStatement></FlexStatements>
+</FlexQueryResponse>
+"""
+
 
 class FakeGhostfolio:
     def __init__(self, existing: list[dict[str, Any]]) -> None:
@@ -120,6 +129,9 @@ async def test_prepare_sync_combines_historical_and_intraday(monkeypatch) -> Non
         "ibkr-account",
         ghostfolio,  # type: ignore[arg-type]
         trade_confirmation_content=TRADE_CONFIRMATIONS_XML,
+        cash_report_content=CASH_REPORT_XML,
+        current_cash_balance=0,
+        cash_balance_currency="EUR",
     )
 
     assert preview.historical_activities == 2
@@ -127,6 +139,32 @@ async def test_prepare_sync_combines_historical_and_intraday(monkeypatch) -> Non
     assert preview.report_activities == 3
     assert len(preview.to_import) == 3
     assert preview.to_import[-1]["symbol"] == "NOW"
+    assert preview.cash_balance == pytest.approx(17.253492428)
+    assert preview.cash_balance_date is not None
+    assert preview.cash_balance_date.isoformat() == "2026-08-10"
+    assert preview.cash_balance_currency == "EUR"
+    assert preview.cash_balance_changed
+
+
+@pytest.mark.asyncio
+async def test_prepare_sync_recognizes_existing_cash_balance(monkeypatch) -> None:
+    async def fake_resolve(
+        activities: list[dict[str, Any]],
+    ) -> tuple[list[dict[str, Any]], list[str]]:
+        return activities, []
+
+    monkeypatch.setattr("bot.ibkr_sync.resolve_symbols", fake_resolve)
+    ghostfolio = FakeGhostfolio([])
+
+    preview = await prepare_ibkr_sync(
+        TRADES_CSV.splitlines()[0] + "\n",
+        "ibkr-account",
+        ghostfolio,  # type: ignore[arg-type]
+        cash_report_content=CASH_REPORT_XML,
+        current_cash_balance=17.253492428,
+    )
+
+    assert not preview.cash_balance_changed
 
 
 @pytest.mark.asyncio

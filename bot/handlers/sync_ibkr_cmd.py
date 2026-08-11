@@ -21,7 +21,12 @@ from telegram.ext import (
 from bot.config import settings
 from bot.ghostfolio_client import GhostfolioClient, GhostfolioError, deduplicate_activities
 from bot.ibkr_flex_client import IbkrFlexClient, IbkrFlexError
-from bot.ibkr_sync import IbkrSyncError, prepare_ibkr_sync, select_ghostfolio_account
+from bot.ibkr_sync import (
+    IbkrSyncError,
+    IbkrSyncPreview,
+    prepare_ibkr_sync,
+    select_ghostfolio_account,
+)
 from bot.utils.auth import restricted
 
 logger = logging.getLogger(__name__)
@@ -66,6 +71,7 @@ async def sync_ibkr_start(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     confirmation_query_id = (
         settings.ibkr_trade_confirmation_query_id or ""
     ).strip()
+    cash_query_id = (settings.ibkr_cash_query_id or "").strip()
     configured_account_id = (
         settings.ibkr_ghostfolio_account_id.strip()
         if settings.ibkr_ghostfolio_account_id
@@ -125,6 +131,17 @@ async def sync_ibkr_start(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                     # A current-day Trade Confirmation can legitimately be empty.
                     logger.info("No IBKR Trade Confirmations are available for today")
 
+            cash_report_content: str | None = None
+            if cash_query_id:
+                await asyncio.sleep(1.1)
+                cash_flex = IbkrFlexClient(token=token, query_id=cash_query_id)
+                try:
+                    cash_report_content = await cash_flex.fetch_csv()
+                except IbkrFlexError as exc:
+                    if exc.code != "1003":
+                        raise
+                    logger.info("No completed IBKR Cash Report is available yet")
+
             async with GhostfolioClient(
                 settings.ghostfolio_url,
                 settings.ghostfolio_access_token,
@@ -135,29 +152,58 @@ async def sync_ibkr_start(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                     account_id=configured_account_id,
                     account_name=settings.ibkr_ghostfolio_account_name,
                 )
+                selected_account = next(
+                    account
+                    for account in accounts
+                    if str(account.get("id") or account.get("accountId")) == account_id
+                )
+                current_cash_balance = float(selected_account.get("balance") or 0)
+                account_currency = str(selected_account.get("currency") or "EUR")
                 preview = await prepare_ibkr_sync(
                     csv_content,
                     account_id,
                     ghostfolio,
                     trade_confirmation_content=trade_confirmation_content,
+                    cash_report_content=cash_report_content,
+                    current_cash_balance=current_cash_balance,
+                    cash_balance_currency=account_currency,
                 )
 
-        if not preview.to_import:
+        if not preview.to_import and not preview.cash_balance_changed:
             extra = _skipped_summary(
                 preview.unresolved_activities,
                 preview.invalid_currency_activities,
             )
-            await status_message.edit_text(
+            lines = [
                 "✅ IBKR and Ghostfolio are already in sync.\n\n"
                 f"Ghostfolio account: {account_name}\n"
                 f"Historical trades: {preview.historical_activities}\n"
                 f"Today's executions: {preview.intraday_activities}\n"
                 f"Duplicates already present: {preview.duplicates_skipped}"
                 f"{extra}"
-            )
+            ]
+            cash_line = _cash_preview_line(preview)
+            if cash_line:
+                lines.append("\n" + cash_line)
+            await status_message.edit_text("".join(lines))
             return ConversationHandler.END
 
-        context.user_data[_STATE_KEY] = preview.to_import
+        cash_update: dict[str, Any] | None = None
+        if (
+            preview.cash_balance_changed
+            and preview.cash_balance is not None
+            and preview.cash_balance_date is not None
+        ):
+            cash_update = {
+                "balance": preview.cash_balance,
+                "currency": preview.cash_balance_currency,
+                "date": preview.cash_balance_date.isoformat(),
+            }
+        context.user_data[_STATE_KEY] = {
+            "account_id": account_id,
+            "activities": preview.to_import,
+            "cash_update": cash_update,
+        }
         lines = [
             "🔄 IBKR → Ghostfolio",
             "",
@@ -168,6 +214,9 @@ async def sync_ibkr_start(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             f"Already in Ghostfolio: {preview.duplicates_skipped}",
             f"New trades: {len(preview.to_import)}",
         ]
+        cash_line = _cash_preview_line(preview)
+        if cash_line:
+            lines.append(cash_line)
         if preview.unresolved_activities:
             lines.append(f"⚠️ Unresolved symbols skipped: {preview.unresolved_activities}")
         if preview.invalid_currency_activities:
@@ -178,21 +227,24 @@ async def sync_ibkr_start(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             lines.extend(["", "⚠️ Ghostfolio validation warnings:"])
             lines.extend(f"• {error[:180]}" for error in preview.validation_errors[:3])
 
-        lines.extend(["", "New trades:"])
-        for activity in preview.to_import[:8]:
-            lines.append(
-                f"• {str(activity.get('date', ''))[:10]} {activity.get('type', '')} "
-                f"{activity.get('quantity', 0)} x {activity.get('symbol', '?')} @ "
-                f"{activity.get('unitPrice', 0)} {activity.get('currency', '')}"
-            )
-        if len(preview.to_import) > 8:
-            lines.append(f"• …and {len(preview.to_import) - 8} more")
+        if preview.to_import:
+            lines.extend(["", "New trades:"])
+            for activity in preview.to_import[:8]:
+                lines.append(
+                    f"• {str(activity.get('date', ''))[:10]} {activity.get('type', '')} "
+                    f"{activity.get('quantity', 0)} x {activity.get('symbol', '?')} @ "
+                    f"{activity.get('unitPrice', 0)} {activity.get('currency', '')}"
+                )
+            if len(preview.to_import) > 8:
+                lines.append(f"• …and {len(preview.to_import) - 8} more")
 
-        lines.extend(["", "Import these trades directly into Ghostfolio?"])
+        lines.extend(["", "Sync these changes directly into Ghostfolio?"])
         keyboard = InlineKeyboardMarkup(
             [[
                 InlineKeyboardButton(
-                    f"✅ Sync {len(preview.to_import)} trades",
+                    _confirmation_button_text(
+                        len(preview.to_import), preview.cash_balance_changed
+                    ),
                     callback_data=_CONFIRM_CB,
                 ),
                 InlineKeyboardButton("❌ Cancel", callback_data=_CANCEL_CB),
@@ -231,12 +283,19 @@ async def sync_ibkr_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await query.edit_message_text("IBKR sync cancelled.")
         return ConversationHandler.END
 
-    activities = context.user_data.pop(_STATE_KEY, None)
-    if not activities:
+    pending = context.user_data.pop(_STATE_KEY, None)
+    if not isinstance(pending, dict):
         await query.edit_message_text("The sync preview expired. Run /sync_ibkr again.")
         return ConversationHandler.END
 
-    await query.edit_message_text("🔄 Importing IBKR trades into Ghostfolio…")
+    activities = list(pending.get("activities") or [])
+    cash_update = pending.get("cash_update")
+    account_id = str(pending.get("account_id") or "")
+    if not account_id or (not activities and not cash_update):
+        await query.edit_message_text("The sync preview expired. Run /sync_ibkr again.")
+        return ConversationHandler.END
+
+    await query.edit_message_text("🔄 Syncing IBKR trades and cash into Ghostfolio…")
     try:
         assert query.message is not None
         async with (
@@ -248,22 +307,40 @@ async def sync_ibkr_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         ):
             # Re-check immediately before writing, so a second sync or another
             # importer cannot create duplicates after the preview was prepared.
-            account_id = str(activities[0].get("accountId", ""))
-            existing = await ghostfolio.get_orders(account_id=account_id)
-            existing_list = (
-                existing.get("activities", [])
-                if isinstance(existing, dict)
-                else existing or []
-            )
-            activities = deduplicate_activities(activities, existing_list)
-            if not activities:
-                await query.edit_message_text(
-                    "✅ IBKR and Ghostfolio are already in sync. Nothing to import."
+            if activities:
+                existing = await ghostfolio.get_orders(account_id=account_id)
+                existing_list = (
+                    existing.get("activities", [])
+                    if isinstance(existing, dict)
+                    else existing or []
                 )
-                return ConversationHandler.END
-            created, skipped_symbols = await ghostfolio.import_activities(activities)
+                activities = deduplicate_activities(activities, existing_list)
 
-        lines = [f"✅ IBKR sync complete: {created} trades imported."]
+            created = 0
+            skipped_symbols: list[str] = []
+            if activities:
+                created, skipped_symbols = await ghostfolio.import_activities(activities)
+
+            cash_updated = False
+            if isinstance(cash_update, dict):
+                await ghostfolio.upsert_account_balance(
+                    account_id=account_id,
+                    balance=float(cash_update["balance"]),
+                    balance_date=date.fromisoformat(str(cash_update["date"])),
+                )
+                cash_updated = True
+
+        lines = ["✅ IBKR sync complete."]
+        if activities:
+            lines.append(f"Trades imported: {created}.")
+        elif not cash_updated:
+            lines.append("No new trades or cash balance changes.")
+        if cash_updated and isinstance(cash_update, dict):
+            lines.append(
+                "Cash balance updated: "
+                f"{float(cash_update['balance']):,.2f} {cash_update['currency']} "
+                f"(as of {cash_update['date']})."
+            )
         if skipped_symbols:
             unique_symbols = ", ".join(sorted(set(skipped_symbols)))
             lines.append(
@@ -275,7 +352,7 @@ async def sync_ibkr_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await query.edit_message_text("\n".join(lines))
     except GhostfolioError as exc:
         logger.error("Ghostfolio error during IBKR sync import: %s", exc)
-        await query.edit_message_text(f"Ghostfolio import failed: {exc.detail}")
+        await query.edit_message_text(f"Ghostfolio sync failed: {exc.detail}")
     except Exception:
         logger.exception("Unexpected error importing the IBKR sync")
         await query.edit_message_text("Unexpected error while importing IBKR trades.")
@@ -336,3 +413,23 @@ def _skipped_summary(unresolved: int, invalid_currency: int) -> str:
     if invalid_currency:
         lines.append(f"\nInvalid currencies skipped: {invalid_currency}")
     return "".join(lines)
+
+
+def _cash_preview_line(preview: IbkrSyncPreview) -> str | None:
+    if preview.cash_balance is None or preview.cash_balance_date is None:
+        return None
+    target = f"{preview.cash_balance:,.2f} {preview.cash_balance_currency}"
+    if preview.cash_balance_changed:
+        current = (
+            f"{preview.current_cash_balance:,.2f} {preview.cash_balance_currency}"
+        )
+        return f"Cash balance ({preview.cash_balance_date}): {current} → {target}"
+    return f"Cash balance ({preview.cash_balance_date}): {target} (already synced)"
+
+
+def _confirmation_button_text(trade_count: int, cash_changed: bool) -> str:
+    if trade_count and cash_changed:
+        return f"✅ Sync {trade_count} trades + cash"
+    if cash_changed:
+        return "✅ Sync cash balance"
+    return f"✅ Sync {trade_count} trades"

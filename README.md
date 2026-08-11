@@ -52,6 +52,7 @@ IMPORT_MODE=direct                       # "direct" or "json"
 IBKR_FLEX_TOKEN=your-flex-token
 IBKR_FLEX_QUERY_ID=your-flex-query-id
 IBKR_TRADE_CONFIRMATION_QUERY_ID=your-today-trade-confirmation-query-id
+IBKR_CASH_QUERY_ID=your-cash-report-query-id
 IBKR_FLEX_LOOKBACK_DAYS=365
 IBKR_GHOSTFOLIO_ACCOUNT_NAME=Interactive Brokers
 ```
@@ -172,6 +173,7 @@ Then enable **Flex Web Service Configuration** and add the generated token and t
 IBKR_FLEX_TOKEN=your-flex-web-service-token
 IBKR_FLEX_QUERY_ID=your-trades-flex-query-id
 IBKR_TRADE_CONFIRMATION_QUERY_ID=your-today-trade-confirmation-query-id
+IBKR_CASH_QUERY_ID=your-cash-report-query-id
 IBKR_FLEX_LOOKBACK_DAYS=365
 IBKR_GHOSTFOLIO_ACCOUNT_NAME=Interactive Brokers
 
@@ -189,6 +191,12 @@ parameter. Activity Flex data is normally updated by IBKR once per day after mar
 the sync ends on the latest completed day rather than requesting the still-unavailable current
 day. Optionally configure a Trade Confirmation Flex Query with period `Today`; its individual
 executions are combined with the historical Activity query so same-day trades can be synced.
+
+To sync cash, configure a separate Activity Flex Query with XML output and a `Cash Report`
+section containing `Currency`, `To Date`, `Ending Cash`, and `Ending Settled Cash`. Include the
+base-currency summary and set `IBKR_CASH_QUERY_ID`. The bot stores `BASE_SUMMARY` → `Ending
+Cash` as a dated Ghostfolio account balance after confirmation. Cash Report data is finalized
+daily and can therefore differ from IBKR's intraday balance.
 
 ---
 

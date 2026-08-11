@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     ibkr_flex_token: SecretStr | None = None
     ibkr_flex_query_id: str | None = None
     ibkr_trade_confirmation_query_id: str | None = None
+    ibkr_cash_query_id: str | None = None
     ibkr_flex_lookback_days: int = Field(default=365, ge=1, le=365)
     # Destination account: explicit UUID takes precedence over the account name.
     ibkr_ghostfolio_account_id: str | None = None
